@@ -1,73 +1,43 @@
 /**
- * 每日水果成本记账与对比 App 核心逻辑 (v2.0 多角色登录与全员共享版)
- * 支持：
- * 1. 手机号/账号登录与注册（区分「采购管理员」可录价改价 vs「普通成员/店员」只读看价防误改）
- * 2. 每日水果成本录入、自动对比昨日涨跌额与涨跌幅
- * 3. 自定义水果种类、计价单位（斤/公斤/箱/件等）、按日期补录与往期查询
- * 4. 历史价格趋势 SVG 折线图、Excel(CSV)导出、联网实时共享同步
+ * 水果每日成本表 (v3.0 极简热修版 - 支持同一水果多规格/品种/果径自定义 + 自动折算单盒/单个成本)
  */
 
-const STORAGE_KEY = 'FRUIT_PRICE_TRACKER_DATA_V1';
+const STORAGE_KEY = 'FRUIT_PRICE_SPEC_V3';
 const CLOUD_CONFIG_KEY = 'FRUIT_PRICE_CLOUD_CONFIG_V1';
-const USERS_STORAGE_KEY = 'FRUIT_PRICE_USERS_V1';
-const SESSION_STORAGE_KEY = 'FRUIT_PRICE_CURRENT_USER_V1';
+const DEFAULT_GITHUB_REPO = 'krisawang/fruit-jilu';
 
 const EMOJI_LIST = [
-  '🍎', '🍏', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇',
-  '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥',
-  '🥝', '🍅', '🥑', '🍈', '🍋‍🟩', '🫒', '🌰', '🧺'
+  '🫐', '🍎', '🍏', '🍐', '🍊', '🍋', '🍌', '🍉',
+  '🍇', '🍓', '🍒', '🍑', '🥭', '🍍', '🥝', '🍅',
+  '🥑', '🍈', '🥥', '🌰', '🍋‍🟩', '🫒', '🧺', '🎁'
 ];
 
-const UNIT_OPTIONS = ['元/斤', '元/公斤', '元/箱', '元/件', '元/筐', '元/盒', '元/个'];
-
-const DEFAULT_USERS = [
-  {
-    id: 'u_admin_1',
-    account: '13800000001',
-    password: '123456',
-    name: '张店长(采购员)',
-    role: 'admin',
-    storeCode: '8888'
-  },
-  {
-    id: 'u_viewer_1',
-    account: '13800000002',
-    password: '123456',
-    name: '小李(门店店员)',
-    role: 'viewer',
-    storeCode: '8888'
-  },
-  {
-    id: 'u_viewer_2',
-    account: '13800000003',
-    password: '123456',
-    name: '小王(收银店员)',
-    role: 'viewer',
-    storeCode: '8888'
-  }
-];
-
-// 全局状态
 let appState = {
-  currentUser: null, // { id, account, name, role: 'admin'|'viewer', storeCode }
-  users: [],
   selectedDate: getTodayStr(),
-  selectedCategory: '全部',
-  statusFilter: 'all', // all | up | down | flat
+  editMode: true, // true: ✏️直接记价模式 | false: 👀只读看价模式
+  selectedFruitFilter: '全部',
   searchQuery: '',
-  trendFruitId: '',
+  trendSpecId: '',
   trendDays: 7,
-  selectedEmoji: '🍎',
-  fruits: [],
-  // records: { "YYYY-MM-DD": { [fruitId]: { price: 5.5, note: "A级果", updatedBy: "张店长", updatedAt: 1700000000 } } }
+  selectedEmoji: '🫐',
+  /**
+   * specs 数组：每一项代表一个具体的「水果+品种规格」
+   * {
+   *   id: 's_1',
+   *   fruitName: '蓝莓',
+   *   emoji: '🫐',
+   *   specTitle: 'L25 · 1箱12盒 · 单盒125g',
+   *   unit: '元/箱',
+   *   subCount: 12,
+   *   subUnit: '盒'
+   * }
+   */
+  specs: [],
+  // records: { "YYYY-MM-DD": { [specId]: { price: 126 } } }
   records: {}
 };
 
-function isAdmin() {
-  return appState.currentUser && appState.currentUser.role === 'admin';
-}
-
-// ==================== 日期工具函数 ====================
+// ==================== 日期工具 ====================
 function formatDateStr(dateObj) {
   const y = dateObj.getFullYear();
   const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -91,45 +61,87 @@ function getRelativeDayLabel(dateStr) {
   if (dateStr === today) return '今天';
   if (dateStr === addDays(today, -1)) return '昨天';
   if (dateStr === addDays(today, -2)) return '前天';
-  if (dateStr > today) return '未来日期';
-  return '历史记录';
+  return dateStr.slice(5);
 }
 
-// ==================== 默认演示数据生成 ====================
+// ==================== 默认示例数据（按您的真实蓝莓、维纳斯苹果规格预置） ====================
 function createDefaultDemoData() {
   const today = getTodayStr();
-  const defaultFruits = [
-    { id: 'f_apple', name: '烟台红富士', emoji: '🍎', unit: '元/斤', category: '日常水果' },
-    { id: 'f_orange', name: '广西砂糖橘', emoji: '🍊', unit: '元/斤', category: '时令鲜果' },
-    { id: 'f_grape', name: '阳光玫瑰青提', emoji: '🍇', unit: '元/斤', category: '时令鲜果' },
-    { id: 'f_straw', name: '丹东奶油草莓', emoji: '🍓', unit: '元/斤', category: '时令鲜果' },
-    { id: 'f_banana', name: '海南香蕉', emoji: '🍌', unit: '元/斤', category: '日常水果' },
-    { id: 'f_melon', name: '麒麟西瓜', emoji: '🍉', unit: '元/斤', category: '瓜果类' },
-    { id: 'f_mango', name: '海南贵妃芒', emoji: '🥭', unit: '元/箱', category: '整箱批发' },
-    { id: 'f_pear', name: '库尔勒香梨', emoji: '🍐', unit: '元/箱', category: '整箱批发' },
-    { id: 'f_cherry', name: '进口车厘子(JJ)', emoji: '🍒', unit: '元/箱', category: '进口精品' },
-    { id: 'f_kiwi', name: '翠香绿心猕猴桃', emoji: '🥝', unit: '元/斤', category: '日常水果' }
+  const defaultSpecs = [
+    {
+      id: 's_blueberry_l25',
+      fruitName: '蓝莓',
+      emoji: '🫐',
+      specTitle: 'L25 · 1箱12盒 · 单盒125g',
+      unit: '元/箱',
+      subCount: 12,
+      subUnit: '盒'
+    },
+    {
+      id: 's_blueberry_l18',
+      fruitName: '蓝莓',
+      emoji: '🫐',
+      specTitle: 'L18 · 1箱12盒 · 单盒125g',
+      unit: '元/箱',
+      subCount: 12,
+      subUnit: '盒'
+    },
+    {
+      id: 's_venus_95',
+      fruitName: '维纳斯苹果',
+      emoji: '🍎',
+      specTitle: '礼盒装 · 95mm+ (8个)',
+      unit: '元/盒',
+      subCount: 8,
+      subUnit: '个'
+    },
+    {
+      id: 's_venus_90',
+      fruitName: '维纳斯苹果',
+      emoji: '🍎',
+      specTitle: '礼盒装 · 90mm+ (9个)',
+      unit: '元/盒',
+      subCount: 9,
+      subUnit: '个'
+    },
+    {
+      id: 's_venus_85',
+      fruitName: '维纳斯苹果',
+      emoji: '🍎',
+      specTitle: '礼盒装 · 85mm+ (10个)',
+      unit: '元/盒',
+      subCount: 10,
+      subUnit: '个'
+    },
+    {
+      id: 's_grape_1',
+      fruitName: '阳光玫瑰',
+      emoji: '🍇',
+      specTitle: '精品青提 · 9斤整箱',
+      unit: '元/箱',
+      subCount: 9,
+      subUnit: '斤'
+    },
+    {
+      id: 's_cherry_2j',
+      fruitName: '进口车厘子',
+      emoji: '🍒',
+      specTitle: '2J级 · 5斤原箱',
+      unit: '元/箱',
+      subCount: 5,
+      subUnit: '斤'
+    }
   ];
 
-  const priceSeries = {
-    f_apple:  [4.20, 4.20, 4.30, 4.50, 4.40, 4.50, 4.80],
-    f_orange: [3.80, 3.60, 3.50, 3.50, 3.40, 3.50, 3.20],
-    f_grape:  [9.50, 9.80, 9.50, 9.20, 9.00, 8.80, 8.50],
-    f_straw:  [15.0, 14.5, 14.8, 15.5, 16.0, 15.8, 16.5],
-    f_banana: [2.60, 2.60, 2.50, 2.50, 2.60, 2.60, 2.60],
-    f_melon:  [2.80, 2.90, 3.00, 3.10, 3.00, 2.90, 3.10],
-    f_mango:  [48.0, 48.0, 46.0, 45.0, 46.0, 46.0, 44.0],
-    f_pear:   [55.0, 55.0, 54.0, 54.0, 56.0, 55.0, 55.0],
-    f_cherry: [260,  255,  250,  248,  245,  240,  235],
-    f_kiwi:   [5.50, 5.50, 5.60, 5.80, 5.60, 5.50, 5.50]
-  };
-
-  const notesToday = {
-    f_apple: '一级果80#，产地雨天微涨',
-    f_orange: '今日大车到货充足，降0.3元',
-    f_grape: '精品无核套袋',
-    f_straw: '周末需求旺，进价上调',
-    f_cherry: '5斤装原箱到货'
+  // 近 7 天演示价格
+  const series = {
+    s_blueberry_l25: [120, 120, 118, 122, 120, 120, 126],
+    s_blueberry_l18: [96, 96, 95, 96, 94, 96, 92],
+    s_venus_95:      [68, 68, 66, 66, 68, 68, 72],
+    s_venus_90:      [62, 62, 60, 60, 62, 62, 62],
+    s_venus_85:      [55, 55, 54, 54, 55, 56, 54],
+    s_grape_1:       [78, 80, 78, 76, 75, 75, 72],
+    s_cherry_2j:     [245, 240, 238, 235, 230, 228, 225]
   };
 
   const records = {};
@@ -137,697 +149,579 @@ function createDefaultDemoData() {
     const dStr = addDays(today, -i);
     records[dStr] = {};
     const idx = 6 - i;
-    defaultFruits.forEach((f) => {
-      const val = priceSeries[f.id] ? priceSeries[f.id][idx] : null;
+    defaultSpecs.forEach((sp) => {
+      const val = series[sp.id] ? series[sp.id][idx] : null;
       if (val !== null && val !== undefined) {
-        records[dStr][f.id] = {
-          price: Number(val),
-          note: i === 0 && notesToday[f.id] ? notesToday[f.id] : '',
-          updatedBy: '张店长(采购员)',
-          updatedAt: Date.now()
-        };
+        records[dStr][sp.id] = { price: Number(val), updatedAt: Date.now() };
       }
     });
   }
 
-  return {
-    fruits: defaultFruits,
-    records
-  };
+  return { specs: defaultSpecs, records };
 }
 
-// ==================== 用户与权限管理 ====================
-function loadUsersAndSession() {
-  try {
-    const rawUsers = localStorage.getItem(USERS_STORAGE_KEY);
-    if (!rawUsers) {
-      appState.users = [...DEFAULT_USERS];
-      saveUsersToStorage();
-    } else {
-      const parsed = JSON.parse(rawUsers);
-      appState.users = Array.isArray(parsed) && parsed.length > 0 ? parsed : [...DEFAULT_USERS];
-    }
-
-    const rawSession = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (rawSession) {
-      appState.currentUser = JSON.parse(rawSession);
-    }
-  } catch (e) {
-    appState.users = [...DEFAULT_USERS];
-  }
-}
-
-function saveUsersToStorage() {
-  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(appState.users));
-}
-
-function loginWithUser(userObj, storeCode = '8888') {
-  appState.currentUser = {
-    id: userObj.id,
-    account: userObj.account,
-    name: userObj.name,
-    role: userObj.role,
-    storeCode: storeCode || userObj.storeCode || '8888'
-  };
-  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(appState.currentUser));
-  document.getElementById('loginScreen').classList.add('hidden');
-  applyRolePermissionsUI();
-  renderAll();
-  // 登录后自动尝试从共享服务端拉取一次最新报价
-  tryAutoSyncFromLocalServer();
-}
-
-function logoutCurrentUser() {
-  appState.currentUser = null;
-  localStorage.removeItem(SESSION_STORAGE_KEY);
-  document.getElementById('loginScreen').classList.remove('hidden');
-}
-
-function applyRolePermissionsUI() {
-  const user = appState.currentUser;
-  const loginScreen = document.getElementById('loginScreen');
-  if (!user) {
-    loginScreen.classList.remove('hidden');
-    return;
-  }
-  loginScreen.classList.add('hidden');
-
-  const adminMode = isAdmin();
-
-  // 控制所有 .admin-only 元素的显隐
-  document.querySelectorAll('.admin-only').forEach((el) => {
-    el.classList.toggle('hidden', !adminMode);
-  });
-
-  // 更新顶部栏用户胶囊与店铺编号
-  document.getElementById('headerStoreBadge').textContent = `店铺#${user.storeCode || '8888'}`;
-  document.getElementById('currentUserRoleIcon').textContent = adminMode ? '👑' : '👀';
-  document.getElementById('currentUserNameText').textContent = user.name;
-
-  // 更新角色状态提示条
-  const roleBar = document.getElementById('roleStatusBar');
-  const roleBarText = document.getElementById('roleBarLeftText');
-  roleBar.classList.toggle('viewer-mode', !adminMode);
-  if (adminMode) {
-    roleBarText.innerHTML = `👑 <strong>管理员录入模式</strong>（${escapeHtml(user.name)}）：可直接录入修改每日成本价`;
-    document.getElementById('tabDailyLabel').textContent = '今日记价';
-  } else {
-    roleBarText.innerHTML = `👀 <strong>全员公开查看模式</strong>（${escapeHtml(user.name)}）：您可查看所有水果价格与对比（只读防误改）`;
-    document.getElementById('tabDailyLabel').textContent = '今日报价';
-  }
-
-  // 更新个人中心卡片
-  document.getElementById('settingsUserIcon').textContent = adminMode ? '👑' : '👀';
-  document.getElementById('settingsUserName').textContent = user.name;
-  const roleBadge = document.getElementById('settingsRoleBadge');
-  roleBadge.textContent = adminMode ? '采购管理员 (可改价)' : '普通成员 (只读看价)';
-  roleBadge.className = 'role-tag ' + (adminMode ? 'admin' : 'viewer');
-  document.getElementById('settingsUserAccount').textContent = `登录账号：${user.account} ｜ 店铺共享码：${user.storeCode || '8888'}`;
-}
-
-// ==================== 本地存储读写 ====================
+// ==================== 本地存储 ====================
 function loadDataFromStorage() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       const demo = createDefaultDemoData();
-      appState.fruits = demo.fruits;
+      appState.specs = demo.specs;
       appState.records = demo.records;
       saveDataToStorage(false);
     } else {
       const parsed = JSON.parse(raw);
-      appState.fruits = Array.isArray(parsed.fruits) ? parsed.fruits : [];
+      appState.specs = Array.isArray(parsed.specs) ? parsed.specs : [];
       appState.records = parsed.records && typeof parsed.records === 'object' ? parsed.records : {};
     }
   } catch (e) {
     const demo = createDefaultDemoData();
-    appState.fruits = demo.fruits;
+    appState.specs = demo.specs;
     appState.records = demo.records;
   }
 
-  if (appState.fruits.length > 0 && !appState.trendFruitId) {
-    appState.trendFruitId = appState.fruits[0].id;
+  if (appState.specs.length > 0 && !appState.trendSpecId) {
+    appState.trendSpecId = appState.specs[0].id;
   }
 }
 
-function saveDataToStorage(syncServer = true) {
+function saveDataToStorage(syncLocal = true) {
   try {
     const payload = {
-      fruits: appState.fruits,
+      specs: appState.specs,
       records: appState.records,
       lastSavedAt: new Date().toISOString()
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    if (syncServer && isAdmin()) {
-      tryAutoPushToLocalServer();
+    if (syncLocal && location.protocol.startsWith('http')) {
+      fetch('/api/shared-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(() => {});
     }
-  } catch (e) {
-    showToast('⚠️ 本地存储空间不足或保存失败');
-  }
-}
-
-// ==================== 局域网/内置共享服务器自动同步 ====================
-async function tryAutoSyncFromLocalServer() {
-  const repoEl = document.getElementById('githubRepoInput');
-  const githubRepo = (repoEl ? repoEl.value.trim() : '') || detectGithubRepoFromUrl();
-  if (githubRepo && navigator.onLine) {
-    try {
-      const apiKey = document.getElementById('cloudApiKeyInput') ? document.getElementById('cloudApiKeyInput').value.trim() : '';
-      await syncWithGithubRepo(githubRepo, apiKey, 'download');
-      return;
-    } catch (e) {}
-  }
-
-  if (!location.protocol.startsWith('http')) return;
-  try {
-    // 先尝试本地/同源实时共享接口，再尝试静态 shared-data.json
-    let res = await fetch('/api/shared-data', { method: 'GET', cache: 'no-store' });
-    if (!res.ok) {
-      res = await fetch('./shared-data.json?t=' + Date.now(), { method: 'GET', cache: 'no-store' });
-    }
-    if (!res.ok) return;
-    const data = await res.json();
-    if (Array.isArray(data.fruits) && data.fruits.length > 0 && typeof data.records === 'object') {
-      appState.fruits = data.fruits;
-      appState.records = data.records;
-      saveDataToStorage(false);
-      renderAll();
-    }
-  } catch (e) {
-    // 静态预览环境无后端时静默忽略
-  }
-}
-
-async function tryAutoPushToLocalServer() {
-  if (!location.protocol.startsWith('http')) return;
-  try {
-    await fetch('/api/shared-data', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fruits: appState.fruits,
-        records: appState.records,
-        updatedBy: appState.currentUser ? appState.currentUser.name : '管理员',
-        updatedAt: new Date().toISOString()
-      })
-    });
   } catch (e) {}
 }
 
-// ==================== 价格查询与对比计算核心 ====================
-function getPriceRecord(dateStr, fruitId) {
+// ==================== 价格读取、单价折算与对比计算 ====================
+function getPrice(dateStr, specId) {
   if (!appState.records[dateStr]) return null;
-  const rec = appState.records[dateStr][fruitId];
-  if (!rec || rec.price === null || rec.price === undefined || rec.price === '' || isNaN(Number(rec.price))) {
+  const r = appState.records[dateStr][specId];
+  if (!r || r.price === null || r.price === undefined || r.price === '' || isNaN(Number(r.price))) {
     return null;
   }
-  return {
-    price: Number(rec.price),
-    note: rec.note || '',
-    updatedBy: rec.updatedBy || ''
-  };
+  return Number(r.price);
 }
 
-function getPreviousRecordedPrice(targetDate, fruitId) {
+function getPrevPriceInfo(targetDate, specId) {
   const prevDay = addDays(targetDate, -1);
-  const yesterdayRec = getPriceRecord(prevDay, fruitId);
-  if (yesterdayRec) {
-    return {
-      isYesterday: true,
-      date: prevDay,
-      price: yesterdayRec.price,
-      note: yesterdayRec.note
-    };
+  const yPrice = getPrice(prevDay, specId);
+  if (yPrice !== null) {
+    return { isYesterday: true, date: prevDay, price: yPrice };
   }
-
-  const allDates = Object.keys(appState.records)
+  const earlierDates = Object.keys(appState.records)
     .filter((d) => d < targetDate)
     .sort((a, b) => (a > b ? -1 : 1));
-
-  for (const d of allDates) {
-    const r = getPriceRecord(d, fruitId);
-    if (r) {
-      return {
-        isYesterday: false,
-        date: d,
-        price: r.price,
-        note: r.note
-      };
+  for (const d of earlierDates) {
+    const p = getPrice(d, specId);
+    if (p !== null) {
+      return { isYesterday: false, date: d, price: p };
     }
   }
   return null;
 }
 
-function calculateComparison(currentPrice, prevInfo) {
-  if (currentPrice === null || currentPrice === undefined || isNaN(currentPrice)) {
-    return { status: 'unrecorded', diff: 0, pct: 0, label: '今日待出价' };
+function calcComparison(curPrice, prevInfo) {
+  if (curPrice === null || curPrice === undefined || isNaN(curPrice)) {
+    return { status: 'none', diff: 0, pct: 0, text: '未填' };
   }
-  if (!prevInfo || prevInfo.price === null || prevInfo.price === undefined) {
-    return { status: 'no_prev', diff: 0, pct: 0, label: '首次报价' };
+  if (!prevInfo) {
+    return { status: 'none', diff: 0, pct: 0, text: '首录' };
   }
-
-  const diff = Number((currentPrice - prevInfo.price).toFixed(2));
+  const diff = Number((curPrice - prevInfo.price).toFixed(2));
   const pct = prevInfo.price > 0 ? Number(((diff / prevInfo.price) * 100).toFixed(1)) : 0;
-  const prefixTag = prevInfo.isYesterday ? '' : '(较上次) ';
 
   if (Math.abs(diff) < 0.001) {
-    return {
-      status: 'flat',
-      diff: 0,
-      pct: 0,
-      label: `${prefixTag}持平 0.00`
-    };
+    return { status: 'flat', diff: 0, pct: 0, text: '持平' };
   } else if (diff > 0) {
-    return {
-      status: 'up',
-      diff,
-      pct,
-      label: `${prefixTag}↑ +${diff.toFixed(2)} (${pct > 0 ? '+' : ''}${pct}%)`
-    };
+    return { status: 'up', diff, pct, text: `↑ +${diff}` };
   } else {
-    return {
-      status: 'down',
-      diff,
-      pct,
-      label: `${prefixTag}↓ ${diff.toFixed(2)} (${pct}%)`
-    };
+    return { status: 'down', diff, pct, text: `↓ ${diff}` };
   }
 }
 
-// ==================== 录入或更新某日某水果价格 ====================
-function setFruitPrice(dateStr, fruitId, priceVal, noteVal) {
-  if (!isAdmin()) {
-    showToast('🔒 当前为只读查看账号，请切换管理员账号修改价格');
-    return;
+function calcUnitBreakdownText(spec, price) {
+  if (!spec.subCount || spec.subCount <= 1 || price === null || isNaN(price) || price <= 0) {
+    return '';
   }
+  const per = (price / spec.subCount).toFixed(2);
+  return `折 ¥${per}/${spec.subUnit || '份'}`;
+}
 
+function setSpecPrice(dateStr, specId, val) {
   if (!appState.records[dateStr]) {
     appState.records[dateStr] = {};
   }
-  const existing = appState.records[dateStr][fruitId] || {};
-  const authorName = appState.currentUser ? appState.currentUser.name : '管理员';
-
-  if (priceVal === '' || priceVal === null || priceVal === undefined || isNaN(Number(priceVal))) {
-    const nextNote = noteVal !== undefined ? noteVal : (existing.note || '');
-    if (!nextNote) {
-      delete appState.records[dateStr][fruitId];
-    } else {
-      appState.records[dateStr][fruitId] = {
-        price: null,
-        note: nextNote,
-        updatedBy: authorName,
-        updatedAt: Date.now()
-      };
-    }
+  if (val === '' || val === null || val === undefined || isNaN(Number(val))) {
+    delete appState.records[dateStr][specId];
   } else {
-    const numPrice = Math.max(0, Number(Number(priceVal).toFixed(2)));
-    appState.records[dateStr][fruitId] = {
-      price: numPrice,
-      note: noteVal !== undefined ? noteVal : (existing.note || ''),
-      updatedBy: authorName,
+    appState.records[dateStr][specId] = {
+      price: Math.max(0, Number(Number(val).toFixed(2))),
       updatedAt: Date.now()
     };
   }
-
   saveDataToStorage(true);
 }
 
-// ==================== UI 渲染：顶部日期与统计 ====================
-function renderDateBarAndStats() {
+// ==================== 渲染顶部日期与模式栏 ====================
+function renderHeaderAndDate() {
   const dateInput = document.getElementById('selectedDateInput');
-  const tagEl = document.getElementById('dateRelationTag');
-  const prevDateText = document.getElementById('prevDateText');
-  const backTodayBanner = document.getElementById('backTodayBanner');
-  const bannerDateStr = document.getElementById('bannerDateStr');
+  const badge = document.getElementById('dateRelationTag');
+  const backBtn = document.getElementById('backTodayBtn');
+  const modeBtn = document.getElementById('modeToggleBtn');
 
   dateInput.value = appState.selectedDate;
-  const relLabel = getRelativeDayLabel(appState.selectedDate);
-  tagEl.textContent = relLabel;
-  tagEl.classList.toggle('history', relLabel !== '今天');
+  const rel = getRelativeDayLabel(appState.selectedDate);
+  badge.textContent = rel;
+  backBtn.classList.toggle('hidden', appState.selectedDate === getTodayStr());
 
-  const prevDay = addDays(appState.selectedDate, -1);
-  prevDateText.textContent = prevDay;
-
-  if (appState.selectedDate !== getTodayStr()) {
-    backTodayBanner.classList.remove('hidden');
-    bannerDateStr.textContent = `${appState.selectedDate} (${relLabel})`;
+  if (appState.editMode) {
+    modeBtn.textContent = '✏️ 记价中';
+    modeBtn.classList.remove('view-active');
   } else {
-    backTodayBanner.classList.add('hidden');
+    modeBtn.textContent = '👀 只看模式';
+    modeBtn.classList.add('view-active');
   }
 
-  let recordedCount = 0;
-  let upCount = 0;
-  let downCount = 0;
-  let flatCount = 0;
-
-  appState.fruits.forEach((f) => {
-    const curRec = getPriceRecord(appState.selectedDate, f.id);
-    const prevInfo = getPreviousRecordedPrice(appState.selectedDate, f.id);
-    if (curRec) {
-      recordedCount++;
-      const cmp = calculateComparison(curRec.price, prevInfo);
-      if (cmp.status === 'up') upCount++;
-      else if (cmp.status === 'down') downCount++;
-      else if (cmp.status === 'flat') flatCount++;
-    }
-  });
-
-  document.getElementById('statRecorded').textContent = `${recordedCount}/${appState.fruits.length}`;
-  document.getElementById('statUpCount').textContent = `↑ ${upCount}`;
-  document.getElementById('statDownCount').textContent = `↓ ${downCount}`;
-  document.getElementById('statFlatCount').textContent = `= ${flatCount}`;
-
-  document.querySelectorAll('.summary-card').forEach((card) => {
-    card.classList.toggle('active-filter', card.dataset.filter === appState.statusFilter);
-  });
+  document.getElementById('topAddSpecBtn').classList.toggle('hidden', !appState.editMode);
+  document.getElementById('bottomAddWrap').classList.toggle('hidden', !appState.editMode);
+  document.getElementById('copyYesterdayAllBtn').classList.toggle('hidden', !appState.editMode);
 }
 
-// ==================== UI 渲染：分类筛选栏 ====================
-function renderCategoryBar() {
+// ==================== 渲染水果大类筛选条 ====================
+function renderFruitFilterBar() {
   const bar = document.getElementById('categoryFilterBar');
-  const categories = ['全部', ...new Set(appState.fruits.map((f) => f.category || '日常水果'))];
+  const fruitNames = ['全部', ...new Set(appState.specs.map((s) => s.fruitName))];
 
-  bar.innerHTML = categories
+  bar.innerHTML = fruitNames
     .map(
-      (cat) => `
-      <button class="cat-chip ${appState.selectedCategory === cat ? 'active' : ''}" data-cat="${escapeHtml(cat)}">
-        ${escapeHtml(cat)}
+      (name) => `
+      <button class="filter-chip ${appState.selectedFruitFilter === name ? 'active' : ''}" data-fruit="${escapeHtml(name)}">
+        ${escapeHtml(name)}
       </button>
     `
     )
     .join('');
 
-  bar.querySelectorAll('.cat-chip').forEach((btn) => {
+  bar.querySelectorAll('.filter-chip').forEach((btn) => {
     btn.addEventListener('click', () => {
-      appState.selectedCategory = btn.dataset.cat;
-      renderCategoryBar();
-      renderDailyFruitList();
+      appState.selectedFruitFilter = btn.dataset.fruit;
+      renderFruitFilterBar();
+      renderDailyGroupedList();
     });
   });
 }
 
-// ==================== UI 渲染：每日水果记价/查看列表 ====================
-function renderDailyFruitList() {
+// ==================== 核心：渲染按水果分组的多规格报价列表 ====================
+function renderDailyGroupedList() {
   const container = document.getElementById('dailyFruitList');
   const q = appState.searchQuery.trim().toLowerCase();
-  const adminMode = isAdmin();
 
-  const filtered = appState.fruits.filter((f) => {
-    if (appState.selectedCategory !== '全部' && f.category !== appState.selectedCategory) {
+  const filteredSpecs = appState.specs.filter((sp) => {
+    if (appState.selectedFruitFilter !== '全部' && sp.fruitName !== appState.selectedFruitFilter) {
       return false;
     }
-
-    const curRec = getPriceRecord(appState.selectedDate, f.id);
-    const prevInfo = getPreviousRecordedPrice(appState.selectedDate, f.id);
-    const cmp = calculateComparison(curRec ? curRec.price : null, prevInfo);
-
-    if (appState.statusFilter === 'up' && cmp.status !== 'up') return false;
-    if (appState.statusFilter === 'down' && cmp.status !== 'down') return false;
-    if (appState.statusFilter === 'flat' && cmp.status !== 'flat') return false;
-
     if (q) {
-      const noteStr = curRec && curRec.note ? curRec.note.toLowerCase() : '';
-      const matchName = f.name.toLowerCase().includes(q);
-      const matchCat = (f.category || '').toLowerCase().includes(q);
-      const matchNote = noteStr.includes(q);
-      if (!matchName && !matchCat && !matchNote) return false;
+      const matchFruit = sp.fruitName.toLowerCase().includes(q);
+      const matchSpec = sp.specTitle.toLowerCase().includes(q);
+      if (!matchFruit && !matchSpec) return false;
     }
     return true;
   });
 
-  if (filtered.length === 0) {
+  if (filteredSpecs.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
-        <p style="font-size:28px;margin-bottom:8px;">🍎</p>
-        <p>没有找到符合筛选条件的水果品种</p>
-        <button class="btn-outline" style="margin-top:10px;" id="resetFilterQuickBtn">显示全部水果</button>
+        <p style="font-size:26px;margin-bottom:6px;">🫐</p>
+        <p>没有匹配的规格，您可以点击「＋ 加水果/规格」自定义添加</p>
       </div>
     `;
-    const resetBtn = document.getElementById('resetFilterQuickBtn');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        appState.selectedCategory = '全部';
-        appState.statusFilter = 'all';
-        appState.searchQuery = '';
-        document.getElementById('fruitSearchInput').value = '';
-        renderCategoryBar();
-        renderDateBarAndStats();
-        renderDailyFruitList();
-      });
-    }
     return;
   }
 
-  container.innerHTML = filtered
-    .map((f) => {
-      const curRec = getPriceRecord(appState.selectedDate, f.id);
-      const prevInfo = getPreviousRecordedPrice(appState.selectedDate, f.id);
-      const curPrice = curRec ? curRec.price : null;
-      const curNote =
-        (appState.records[appState.selectedDate] &&
-          appState.records[appState.selectedDate][f.id] &&
-          appState.records[appState.selectedDate][f.id].note) ||
-        '';
-      const cmp = calculateComparison(curPrice, prevInfo);
+  // 按水果名称分组
+  const groupsMap = new Map();
+  filteredSpecs.forEach((sp) => {
+    if (!groupsMap.has(sp.fruitName)) {
+      groupsMap.set(sp.fruitName, {
+        fruitName: sp.fruitName,
+        emoji: sp.emoji || '🍎',
+        items: []
+      });
+    }
+    groupsMap.get(sp.fruitName).items.push(sp);
+  });
 
-      let cardBorderClass = '';
-      let badgeClass = 'none';
-      if (curPrice !== null) {
-        if (cmp.status === 'up') {
-          cardBorderClass = 'price-up';
-          badgeClass = 'up';
-        } else if (cmp.status === 'down') {
-          cardBorderClass = 'price-down';
-          badgeClass = 'down';
-        } else {
-          cardBorderClass = 'has-price';
-          badgeClass = 'flat';
-        }
-      }
+  const groupsHtml = Array.from(groupsMap.values())
+    .map((group) => {
+      const rowsHtml = group.items
+        .map((sp) => {
+          const curPrice = getPrice(appState.selectedDate, sp.id);
+          const prevInfo = getPrevPriceInfo(appState.selectedDate, sp.id);
+          const cmp = calcComparison(curPrice, prevInfo);
+          const breakdown = calcUnitBreakdownText(sp, curPrice !== null ? curPrice : prevInfo ? prevInfo.price : null);
+          const shortUnit = sp.unit.replace('元/', '/');
 
-      const prevText = prevInfo
-        ? `${prevInfo.isYesterday ? '昨日' : `上次(${prevInfo.date.slice(5)})`}: ¥${prevInfo.price.toFixed(2)}`
-        : '昨日: 暂无记录';
+          const prevText = prevInfo
+            ? `${prevInfo.isYesterday ? '昨' : '前'} ¥${prevInfo.price}`
+            : '昨日无';
 
-      const unitOptionsHtml = UNIT_OPTIONS.map(
-        (u) => `<option value="${u}" ${f.unit === u ? 'selected' : ''}>${u}</option>`
-      ).join('');
+          const priceColHtml = appState.editMode
+            ? `
+              <div class="direct-price-box">
+                <span class="direct-yen">¥</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  inputmode="decimal"
+                  class="direct-price-input"
+                  data-action="price-input"
+                  data-id="${sp.id}"
+                  placeholder="记价"
+                  value="${curPrice !== null ? curPrice : ''}"
+                />
+                <span class="direct-unit">${escapeHtml(shortUnit)}</span>
+              </div>
+            `
+            : `
+              <div class="readonly-price-badge">
+                ${
+                  curPrice !== null
+                    ? `<span class="readonly-price-num">¥${curPrice}</span><span class="readonly-price-u">${escapeHtml(shortUnit)}</span>`
+                    : `<span style="color:#94a3b8;font-size:12px;">待录入</span>`
+                }
+              </div>
+            `;
 
-      // 区分管理员录入视图 vs 普通店员只读查看视图
-      const bottomRowHtml = adminMode
-        ? `
-          <div class="fruit-input-row">
-            <div class="price-input-group">
-              <span class="currency-prefix">¥</span>
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                inputmode="decimal"
-                class="price-input"
-                data-action="input-price"
-                data-id="${f.id}"
-                placeholder="输入成本价"
-                value="${curPrice !== null ? curPrice : ''}"
-              />
-              <span class="unit-suffix">${escapeHtml(f.unit.replace('元/', '/'))}</span>
-              <div class="step-btns">
-                <button class="btn-step" data-action="step-price" data-id="${f.id}" data-delta="-0.5" title="减0.5元">－</button>
-                <button class="btn-step" data-action="step-price" data-id="${f.id}" data-delta="0.5" title="加0.5元">＋</button>
+          return `
+            <div class="spec-row" data-spec-id="${sp.id}">
+              <!-- 左：规格名与折算单价 -->
+              <div class="spec-info-col" data-action="edit-or-trend" data-id="${sp.id}" title="点击修改此规格或看走势">
+                <div class="spec-title-line">
+                  <span>${escapeHtml(sp.specTitle)}</span>
+                  ${appState.editMode ? `<span class="spec-edit-hint">⚙️</span>` : ''}
+                </div>
+                <div class="spec-sub-line">
+                  <span>单位: ${escapeHtml(sp.unit)}</span>
+                  <span class="unit-calc-tag ${breakdown ? '' : 'hidden'}" id="calc-${sp.id}">${escapeHtml(breakdown)}</span>
+                </div>
+              </div>
+
+              <!-- 中：昨日价格 & 涨跌对比 -->
+              <div class="spec-compare-col">
+                <span class="prev-price-line" data-action="copy-single-prev" data-id="${sp.id}" data-prev="${prevInfo ? prevInfo.price : ''}" title="点击沿用昨日价格">
+                  ${prevText}
+                </span>
+                <span class="diff-pill ${cmp.status}" id="diff-${sp.id}">${cmp.text}</span>
+              </div>
+
+              <!-- 右：今日价格直接输入框 / 只读显示 -->
+              <div class="spec-price-col">
+                ${priceColHtml}
               </div>
             </div>
-
-            <div class="note-input-group">
-              <input
-                type="text"
-                class="note-input"
-                data-action="input-note"
-                data-id="${f.id}"
-                placeholder="备注(如产地/等级)"
-                value="${escapeHtml(curNote)}"
-              />
-            </div>
-          </div>
-        `
-        : `
-          <div class="readonly-price-row">
-            <div class="readonly-price-main">
-              <span class="readonly-price-label">当日成本：</span>
-              ${
-                curPrice !== null
-                  ? `<span class="readonly-price-val">¥${curPrice.toFixed(2)}</span>
-                     <span class="readonly-price-unit">${escapeHtml(f.unit.replace('元/', '/'))}</span>`
-                  : `<span style="color:#94a3b8;font-size:13px;font-weight:600;">今日暂未出价</span>`
-              }
-            </div>
-            <div class="readonly-note">
-              ${curNote ? `📌 ${escapeHtml(curNote)}` : '<span style="color:#cbd5e1;">无备注</span>'}
-            </div>
-          </div>
-        `;
+          `;
+        })
+        .join('');
 
       return `
-        <div class="fruit-card ${cardBorderClass}" data-fruit-id="${f.id}">
-          <div class="fruit-card-top">
-            <div class="fruit-info">
-              <div class="fruit-emoji">${f.emoji || '🍎'}</div>
-              <div>
-                <div class="fruit-title-row">
-                  <span class="fruit-name">${escapeHtml(f.name)}</span>
-                  <span class="fruit-cat-badge">${escapeHtml(f.category || '日常')}</span>
-                  ${
-                    adminMode
-                      ? `<select class="fruit-unit-select-inline" data-action="change-unit" data-id="${f.id}" title="切换计价单位">${unitOptionsHtml}</select>`
-                      : `<span class="fruit-unit-static">${escapeHtml(f.unit)}</span>`
-                  }
-                </div>
-                <div class="fruit-prev-meta">
-                  <span>${prevText}</span>
-                  ${
-                    adminMode && prevInfo
-                      ? `<button class="btn-use-prev" data-action="copy-prev" data-id="${f.id}" data-price="${prevInfo.price}">填入¥${prevInfo.price.toFixed(2)}</button>`
-                      : ''
-                  }
-                </div>
-              </div>
+        <div class="fruit-group-card">
+          <div class="group-header">
+            <div class="group-title">
+              <span>${group.emoji}</span>
+              <span>${escapeHtml(group.fruitName)}</span>
+              <span class="group-count">${group.items.length}种规格</span>
             </div>
-
-            <div class="compare-badge-wrap">
-              <span class="compare-badge ${badgeClass}" id="badge-${f.id}">${cmp.label}</span>
-              <button class="btn-card-trend" data-action="jump-trend" data-id="${f.id}">📈 查看走势</button>
-            </div>
+            ${
+              appState.editMode
+                ? `<button class="btn-group-add-spec" data-action="add-spec-for-fruit" data-fruit="${escapeHtml(group.fruitName)}" data-emoji="${group.emoji}">
+                    ＋ 加规格
+                  </button>`
+                : ''
+            }
           </div>
-
-          ${bottomRowHtml}
+          <div class="group-rows">
+            ${rowsHtml}
+          </div>
         </div>
       `;
     })
     .join('');
 
-  bindDailyCardEvents(container);
+  container.innerHTML = groupsHtml;
+  bindGroupedListEvents(container);
 }
 
-function updateSingleCardComparisonUI(fruitId) {
-  const card = document.querySelector(`.fruit-card[data-fruit-id="${fruitId}"]`);
-  const badge = document.getElementById(`badge-${fruitId}`);
-  if (!card || !badge) return;
+/**
+ * 输入价格时实时局部刷新涨跌标签与单盒折算价（不丢失输入框焦点）
+ */
+function updateSingleSpecRowUI(specId) {
+  const sp = appState.specs.find((s) => s.id === specId);
+  if (!sp) return;
+  const curPrice = getPrice(appState.selectedDate, specId);
+  const prevInfo = getPrevPriceInfo(appState.selectedDate, specId);
+  const cmp = calcComparison(curPrice, prevInfo);
 
-  const curRec = getPriceRecord(appState.selectedDate, fruitId);
-  const prevInfo = getPreviousRecordedPrice(appState.selectedDate, fruitId);
-  const curPrice = curRec ? curRec.price : null;
-  const cmp = calculateComparison(curPrice, prevInfo);
-
-  card.classList.remove('has-price', 'price-up', 'price-down');
-  badge.classList.remove('up', 'down', 'flat', 'none');
-
-  if (curPrice !== null) {
-    if (cmp.status === 'up') {
-      card.classList.add('price-up');
-      badge.classList.add('up');
-    } else if (cmp.status === 'down') {
-      card.classList.add('price-down');
-      badge.classList.add('down');
-    } else {
-      card.classList.add('has-price');
-      badge.classList.add('flat');
-    }
-  } else {
-    badge.classList.add('none');
+  const diffEl = document.getElementById(`diff-${specId}`);
+  if (diffEl) {
+    diffEl.className = `diff-pill ${cmp.status}`;
+    diffEl.textContent = cmp.text;
   }
-  badge.textContent = cmp.label;
-  renderDateBarAndStats();
+
+  const calcEl = document.getElementById(`calc-${specId}`);
+  if (calcEl) {
+    const breakdown = calcUnitBreakdownText(sp, curPrice !== null ? curPrice : prevInfo ? prevInfo.price : null);
+    if (breakdown) {
+      calcEl.textContent = breakdown;
+      calcEl.classList.remove('hidden');
+    } else {
+      calcEl.classList.add('hidden');
+    }
+  }
 }
 
-function bindDailyCardEvents(container) {
-  container.querySelectorAll('input[data-action="input-price"]').forEach((input) => {
+function bindGroupedListEvents(container) {
+  // 直接输入今日价格
+  container.querySelectorAll('input[data-action="price-input"]').forEach((input) => {
     input.addEventListener('input', (e) => {
-      const id = e.target.dataset.id;
-      const val = e.target.value;
-      setFruitPrice(appState.selectedDate, id, val, undefined);
-      updateSingleCardComparisonUI(id);
+      const specId = e.target.dataset.id;
+      setSpecPrice(appState.selectedDate, specId, e.target.value);
+      updateSingleSpecRowUI(specId);
     });
   });
 
-  container.querySelectorAll('input[data-action="input-note"]').forEach((input) => {
-    input.addEventListener('input', (e) => {
-      const id = e.target.dataset.id;
-      const curRec = getPriceRecord(appState.selectedDate, id);
-      setFruitPrice(appState.selectedDate, id, curRec ? curRec.price : '', e.target.value);
+  // 点击某水果右上角「＋加规格」直接为该水果新增一个规格
+  container.querySelectorAll('button[data-action="add-spec-for-fruit"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openSpecModal(null, btn.dataset.fruit, btn.dataset.emoji);
     });
   });
 
-  container.querySelectorAll('select[data-action="change-unit"]').forEach((sel) => {
-    sel.addEventListener('change', (e) => {
-      const id = e.target.dataset.id;
-      const fruit = appState.fruits.find((f) => f.id === id);
-      if (fruit) {
-        fruit.unit = e.target.value;
-        saveDataToStorage();
-        renderDailyFruitList();
-        showToast(`✅ 已将「${fruit.name}」单位改为 ${fruit.unit}`);
+  // 点击左侧规格名称：记价模式下可编辑规格，只看模式下直接跳到该规格走势图
+  container.querySelectorAll('[data-action="edit-or-trend"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.id;
+      if (appState.editMode) {
+        openSpecModal(id);
+      } else {
+        appState.trendSpecId = id;
+        switchTab('tab-trend');
       }
     });
   });
 
-  container.querySelectorAll('button[data-action="copy-prev"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.id;
-      const price = Number(btn.dataset.price);
-      setFruitPrice(appState.selectedDate, id, price, undefined);
-      renderDailyFruitList();
-      renderDateBarAndStats();
-      showToast('⚡ 已沿用前一日价格');
-    });
-  });
-
-  container.querySelectorAll('button[data-action="step-price"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.id;
-      const delta = Number(btn.dataset.delta);
-      const curRec = getPriceRecord(appState.selectedDate, id);
-      const prevInfo = getPreviousRecordedPrice(appState.selectedDate, id);
-      const base = curRec ? curRec.price : prevInfo ? prevInfo.price : 0;
-      const nextPrice = Math.max(0, Number((base + delta).toFixed(2)));
-      setFruitPrice(appState.selectedDate, id, nextPrice, undefined);
-      const inputEl = container.querySelector(`input[data-action="input-price"][data-id="${id}"]`);
-      if (inputEl) inputEl.value = nextPrice;
-      updateSingleCardComparisonUI(id);
-    });
-  });
-
-  container.querySelectorAll('button[data-action="jump-trend"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      appState.trendFruitId = btn.dataset.id;
-      switchTab('tab-trend');
+  // 点击“昨 ¥XX”一键填入今日
+  container.querySelectorAll('[data-action="copy-single-prev"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (!appState.editMode) return;
+      const prevVal = el.dataset.prev;
+      if (prevVal === '' || prevVal === undefined) return;
+      const id = el.dataset.id;
+      setSpecPrice(appState.selectedDate, id, Number(prevVal));
+      renderDailyGroupedList();
+      showToast('⚡ 已填入昨日价格');
     });
   });
 }
 
-// ==================== TAB 2: 趋势分析与 SVG 折线图 ====================
-function renderTrendTab() {
-  const selectEl = document.getElementById('trendFruitSelect');
-  if (appState.fruits.length === 0) {
-    selectEl.innerHTML = '<option value="">暂无水果品种</option>';
+// ==================== 新增 / 编辑水果规格弹窗 ====================
+function renderEmojiPickerInModal() {
+  const btn = document.getElementById('currentEmojiBtn');
+  const grid = document.getElementById('emojiPickerGrid');
+  btn.textContent = appState.selectedEmoji;
+
+  grid.innerHTML = EMOJI_LIST.map(
+    (em) => `
+      <button type="button" class="emoji-option ${appState.selectedEmoji === em ? 'selected' : ''}" data-emoji="${em}">
+        ${em}
+      </button>
+    `
+  ).join('');
+
+  grid.querySelectorAll('.emoji-option').forEach((b) => {
+    b.addEventListener('click', () => {
+      appState.selectedEmoji = b.dataset.emoji;
+      btn.textContent = appState.selectedEmoji;
+      grid.classList.add('hidden');
+    });
+  });
+}
+
+function openSpecModal(editSpecId = null, prefillFruitName = '', prefillEmoji = '') {
+  const overlay = document.getElementById('specModalOverlay');
+  const titleEl = document.getElementById('specModalTitle');
+  const editIdInput = document.getElementById('editSpecIdInput');
+  const fruitInput = document.getElementById('fruitGroupNameInput');
+  const specTitleInput = document.getElementById('specTitleInput');
+  const unitSelect = document.getElementById('specUnitSelect');
+  const subCountInput = document.getElementById('specSubCountInput');
+  const subUnitSelect = document.getElementById('specSubUnitSelect');
+  const initPriceGroup = document.getElementById('initPriceGroup');
+  const initPriceInput = document.getElementById('specInitPriceInput');
+  const deleteBtn = document.getElementById('deleteSpecBtn');
+
+  // 渲染已有水果快捷点选胶囊
+  const existingFruitsMap = new Map();
+  appState.specs.forEach((s) => {
+    if (!existingFruitsMap.has(s.fruitName)) {
+      existingFruitsMap.set(s.fruitName, s.emoji || '🍎');
+    }
+  });
+  const quickPickEl = document.getElementById('existingFruitQuickPick');
+  if (existingFruitsMap.size > 0) {
+    quickPickEl.innerHTML =
+      `<span style="font-size:11px;color:#94a3b8;align-self:center;">点选已有水果：</span>` +
+      Array.from(existingFruitsMap.entries())
+        .map(
+          ([fName, em]) =>
+            `<button type="button" class="quick-fruit-tag" data-fname="${escapeHtml(fName)}" data-femoji="${em}">${em} ${escapeHtml(fName)}</button>`
+        )
+        .join('');
+    quickPickEl.querySelectorAll('.quick-fruit-tag').forEach((tag) => {
+      tag.addEventListener('click', () => {
+        fruitInput.value = tag.dataset.fname;
+        appState.selectedEmoji = tag.dataset.femoji;
+        document.getElementById('currentEmojiBtn').textContent = appState.selectedEmoji;
+        specTitleInput.focus();
+      });
+    });
+  } else {
+    quickPickEl.innerHTML = '';
+  }
+
+  if (editSpecId) {
+    const sp = appState.specs.find((s) => s.id === editSpecId);
+    if (!sp) return;
+    titleEl.textContent = '修改水果与规格';
+    editIdInput.value = sp.id;
+    fruitInput.value = sp.fruitName;
+    appState.selectedEmoji = sp.emoji || '🍎';
+    specTitleInput.value = sp.specTitle;
+    unitSelect.value = sp.unit || '元/箱';
+    subCountInput.value = sp.subCount || '';
+    subUnitSelect.value = sp.subUnit || '盒';
+    initPriceGroup.classList.add('hidden');
+    deleteBtn.classList.remove('hidden');
+  } else {
+    titleEl.textContent = prefillFruitName ? `为「${prefillFruitName}」添加新规格` : '添加水果与规格';
+    editIdInput.value = '';
+    fruitInput.value = prefillFruitName || '';
+    appState.selectedEmoji = prefillEmoji || '🫐';
+    specTitleInput.value = '';
+    unitSelect.value = '元/箱';
+    subCountInput.value = '';
+    subUnitSelect.value = '盒';
+    initPriceInput.value = '';
+    initPriceGroup.classList.remove('hidden');
+    deleteBtn.classList.add('hidden');
+  }
+
+  renderEmojiPickerInModal();
+  overlay.classList.remove('hidden');
+  setTimeout(() => {
+    if (fruitInput.value) specTitleInput.focus();
+    else fruitInput.focus();
+  }, 60);
+}
+
+function closeSpecModal() {
+  document.getElementById('specModalOverlay').classList.add('hidden');
+  document.getElementById('emojiPickerGrid').classList.add('hidden');
+}
+
+function saveSpecFromModal() {
+  const editId = document.getElementById('editSpecIdInput').value.trim();
+  const fruitName = document.getElementById('fruitGroupNameInput').value.trim();
+  const specTitle = document.getElementById('specTitleInput').value.trim();
+  const unit = document.getElementById('specUnitSelect').value;
+  const subCountRaw = document.getElementById('specSubCountInput').value.trim();
+  const subCount = subCountRaw ? Number(subCountRaw) : 0;
+  const subUnit = document.getElementById('specSubUnitSelect').value;
+  const initPrice = document.getElementById('specInitPriceInput').value.trim();
+
+  if (!fruitName) {
+    showToast('⚠️ 请填写水果名称（如：蓝莓、维纳斯苹果）');
+    return;
+  }
+  if (!specTitle) {
+    showToast('⚠️ 请填写品种或规格（如：L25 1箱12盒 或 95mm+ 8个）');
     return;
   }
 
-  if (!appState.fruits.some((f) => f.id === appState.trendFruitId)) {
-    appState.trendFruitId = appState.fruits[0].id;
+  // 同步同水果的 emoji
+  appState.specs.forEach((s) => {
+    if (s.fruitName === fruitName) s.emoji = appState.selectedEmoji;
+  });
+
+  if (editId) {
+    const sp = appState.specs.find((s) => s.id === editId);
+    if (sp) {
+      sp.fruitName = fruitName;
+      sp.emoji = appState.selectedEmoji;
+      sp.specTitle = specTitle;
+      sp.unit = unit;
+      sp.subCount = subCount;
+      sp.subUnit = subUnit;
+    }
+    showToast(`✅ 已修改「${fruitName} - ${specTitle}」`);
+  } else {
+    const newId = 'sp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5);
+    appState.specs.push({
+      id: newId,
+      fruitName,
+      emoji: appState.selectedEmoji,
+      specTitle,
+      unit,
+      subCount,
+      subUnit
+    });
+    if (initPrice !== '' && !isNaN(Number(initPrice))) {
+      setSpecPrice(appState.selectedDate, newId, Number(initPrice));
+    }
+    showToast(`🎉 已添加「${fruitName} · ${specTitle}」`);
   }
 
-  selectEl.innerHTML = appState.fruits
+  saveDataToStorage(true);
+  closeSpecModal();
+  renderFruitFilterBar();
+  renderDailyGroupedList();
+}
+
+// ==================== 页面 2：历史走势折线图 ====================
+function renderTrendTab() {
+  const selectEl = document.getElementById('trendFruitSelect');
+  if (appState.specs.length === 0) {
+    selectEl.innerHTML = '<option value="">暂无水果规格</option>';
+    return;
+  }
+  if (!appState.specs.some((s) => s.id === appState.trendSpecId)) {
+    appState.trendSpecId = appState.specs[0].id;
+  }
+
+  selectEl.innerHTML = appState.specs
     .map(
-      (f) =>
-        `<option value="${f.id}" ${f.id === appState.trendFruitId ? 'selected' : ''}>${f.emoji} ${escapeHtml(
-          f.name
-        )} (${escapeHtml(f.unit)})</option>`
+      (s) =>
+        `<option value="${s.id}" ${s.id === appState.trendSpecId ? 'selected' : ''}>${s.emoji} ${escapeHtml(
+          s.fruitName
+        )} — ${escapeHtml(s.specTitle)} (${escapeHtml(s.unit)})</option>`
     )
     .join('');
 
-  const fruit = appState.fruits.find((f) => f.id === appState.trendFruitId);
-  if (!fruit) return;
+  const sp = appState.specs.find((s) => s.id === appState.trendSpecId);
+  if (!sp) return;
 
-  document.getElementById('historyTableFruitName').textContent = `${fruit.emoji} ${fruit.name}`;
+  document.getElementById('historyTableFruitName').textContent = `${sp.emoji} ${sp.fruitName} (${sp.specTitle})`;
 
   const today = appState.selectedDate;
   const startDay = addDays(today, -(appState.trendDays - 1));
@@ -836,9 +730,9 @@ function renderTrendTab() {
   Object.keys(appState.records)
     .sort()
     .forEach((d) => {
-      const rec = getPriceRecord(d, fruit.id);
-      if (rec) {
-        allPoints.push({ date: d, price: rec.price, note: rec.note, updatedBy: rec.updatedBy });
+      const p = getPrice(d, sp.id);
+      if (p !== null) {
+        allPoints.push({ date: d, price: p });
       }
     });
 
@@ -859,30 +753,29 @@ function renderTrendTab() {
     const minP = Math.min(...prices);
     const avgP = prices.reduce((a, b) => a + b, 0) / prices.length;
 
-    document.getElementById('trendLatestPrice').textContent = `¥${latest.toFixed(2)}`;
-    document.getElementById('trendMaxPrice').textContent = `¥${maxP.toFixed(2)}`;
-    document.getElementById('trendMinPrice').textContent = `¥${minP.toFixed(2)}`;
-    document.getElementById('trendAvgPrice').textContent = `¥${avgP.toFixed(2)}`;
+    document.getElementById('trendLatestPrice').textContent = `¥${latest}`;
+    document.getElementById('trendMaxPrice').textContent = `¥${maxP}`;
+    document.getElementById('trendMinPrice').textContent = `¥${minP}`;
+    document.getElementById('trendAvgPrice').textContent = `¥${avgP.toFixed(1)}`;
   }
 
-  renderSvgLineChart(periodPoints, fruit);
-  renderDailyRankingList();
-  renderFruitHistoryTable(allPoints, fruit);
+  renderSvgChart(periodPoints, sp);
+  renderHistoryTable(allPoints, sp);
 }
 
-function renderSvgLineChart(points, fruit) {
+function renderSvgChart(points, sp) {
   const container = document.getElementById('chartContainer');
   if (points.length === 0) {
-    container.innerHTML = `<div class="empty-state">该时间段内暂无「${escapeHtml(fruit.name)}」的价格记录</div>`;
+    container.innerHTML = `<div class="empty-state">暂无「${escapeHtml(sp.fruitName)} - ${escapeHtml(sp.specTitle)}」的价格记录</div>`;
     return;
   }
 
   const width = 360;
-  const height = 195;
-  const padLeft = 40;
+  const height = 190;
+  const padLeft = 42;
   const padRight = 22;
-  const padTop = 28;
-  const padBottom = 32;
+  const padTop = 26;
+  const padBottom = 30;
   const chartW = width - padLeft - padRight;
   const chartH = height - padTop - padBottom;
 
@@ -890,21 +783,16 @@ function renderSvgLineChart(points, fruit) {
   let minVal = Math.min(...prices);
   let maxVal = Math.max(...prices);
   if (minVal === maxVal) {
-    minVal = Math.max(0, minVal - 1);
-    maxVal = maxVal + 1;
+    minVal = Math.max(0, minVal - 2);
+    maxVal = maxVal + 2;
   } else {
     const pad = (maxVal - minVal) * 0.15;
     minVal = Math.max(0, minVal - pad);
     maxVal = maxVal + pad;
   }
 
-  const getX = (idx) => {
-    if (points.length === 1) return padLeft + chartW / 2;
-    return padLeft + (idx / (points.length - 1)) * chartW;
-  };
-  const getY = (val) => {
-    return padTop + chartH - ((val - minVal) / (maxVal - minVal)) * chartH;
-  };
+  const getX = (idx) => (points.length === 1 ? padLeft + chartW / 2 : padLeft + (idx / (points.length - 1)) * chartW);
+  const getY = (val) => padTop + chartH - ((val - minVal) / (maxVal - minVal)) * chartH;
 
   const coords = points.map((p, idx) => ({
     x: Number(getX(idx).toFixed(1)),
@@ -922,7 +810,7 @@ function renderSvgLineChart(points, fruit) {
     const y = getY(val).toFixed(1);
     gridLines += `
       <line x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}" stroke="#e2e8f0" stroke-dasharray="3,3" />
-      <text x="${padLeft - 6}" y="${Number(y) + 4}" text-anchor="end" font-size="10" fill="#94a3b8">¥${val.toFixed(1)}</text>
+      <text x="${padLeft - 6}" y="${Number(y) + 4}" text-anchor="end" font-size="10" fill="#94a3b8">¥${val.toFixed(0)}</text>
     `;
   }
 
@@ -930,13 +818,12 @@ function renderSvgLineChart(points, fruit) {
   const circlesHtml = coords
     .map((c, idx) => {
       const showLabel = idx === 0 || idx === coords.length - 1 || idx % stepLabel === 0;
-      const shortDate = c.date.slice(5);
       return `
-        <circle cx="${c.x}" cy="${c.y}" r="4" fill="#10b981" stroke="#ffffff" stroke-width="2" />
+        <circle cx="${c.x}" cy="${c.y}" r="4" fill="#059669" stroke="#ffffff" stroke-width="2" />
         ${
           showLabel
-            ? `<text x="${c.x}" y="${c.y - 9}" text-anchor="middle" font-size="10" font-weight="700" fill="#0f172a">¥${c.price.toFixed(2)}</text>
-               <text x="${c.x}" y="${height - 10}" text-anchor="middle" font-size="10" fill="#64748b">${shortDate}</text>`
+            ? `<text x="${c.x}" y="${c.y - 8}" text-anchor="middle" font-size="10" font-weight="700" fill="#0f172a">¥${c.price}</text>
+               <text x="${c.x}" y="${height - 8}" text-anchor="middle" font-size="10" fill="#64748b">${c.date.slice(5)}</text>`
             : ''
         }
       `;
@@ -944,462 +831,58 @@ function renderSvgLineChart(points, fruit) {
     .join('');
 
   container.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" width="100%" height="195">
+    <svg viewBox="0 0 ${width} ${height}" width="100%" height="190">
       <defs>
-        <linearGradient id="lineAreaGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#10b981" stop-opacity="0.28" />
-          <stop offset="100%" stop-color="#10b981" stop-opacity="0.0" />
+        <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#059669" stop-opacity="0.25" />
+          <stop offset="100%" stop-color="#059669" stop-opacity="0.0" />
         </linearGradient>
       </defs>
       ${gridLines}
-      ${coords.length > 1 ? `<polygon points="${areaPoints}" fill="url(#lineAreaGrad)" />` : ''}
-      ${
-        coords.length > 1
-          ? `<polyline fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${polylinePoints}" />`
-          : ''
-      }
+      ${coords.length > 1 ? `<polygon points="${areaPoints}" fill="url(#lineGrad)" />` : ''}
+      ${coords.length > 1 ? `<polyline fill="none" stroke="#059669" stroke-width="2.5" points="${polylinePoints}" />` : ''}
       ${circlesHtml}
     </svg>
   `;
 }
 
-function renderDailyRankingList() {
-  const rankEl = document.getElementById('dailyRankingList');
-  document.getElementById('rankingDateLabel').textContent = appState.selectedDate;
-
-  const items = [];
-  appState.fruits.forEach((f) => {
-    const curRec = getPriceRecord(appState.selectedDate, f.id);
-    if (!curRec) return;
-    const prevInfo = getPreviousRecordedPrice(appState.selectedDate, f.id);
-    const cmp = calculateComparison(curRec.price, prevInfo);
-    items.push({ fruit: f, curPrice: curRec.price, cmp });
-  });
-
-  if (items.length === 0) {
-    rankEl.innerHTML = `<div class="empty-state" style="padding:14px;">当日暂未录入价格</div>`;
-    return;
-  }
-
-  items.sort((a, b) => Math.abs(b.cmp.pct) - Math.abs(a.cmp.pct));
-
-  rankEl.innerHTML = items
-    .map(({ fruit, curPrice, cmp }) => {
-      const cls = cmp.status === 'up' ? 'up' : cmp.status === 'down' ? 'down' : 'flat';
-      return `
-        <div class="ranking-item">
-          <div class="ranking-left">
-            <span>${fruit.emoji}</span>
-            <strong>${escapeHtml(fruit.name)}</strong>
-            <span style="color:#64748b;font-size:12px;">¥${curPrice.toFixed(2)} ${escapeHtml(fruit.unit)}</span>
-          </div>
-          <span class="compare-badge ${cls}">${cmp.label}</span>
-        </div>
-      `;
-    })
-    .join('');
-}
-
-function renderFruitHistoryTable(allPoints, fruit) {
+function renderHistoryTable(allPoints, sp) {
   const tbody = document.getElementById('fruitHistoryTableBody');
   if (allPoints.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:16px;">暂无历史价格记录</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:14px;">暂无记录</td></tr>`;
     return;
   }
-
-  const reversed = [...allPoints].reverse();
-  tbody.innerHTML = reversed
+  const rev = [...allPoints].reverse();
+  tbody.innerHTML = rev
     .map((pt, idx) => {
-      const prevPt = reversed[idx + 1] || null;
-      let deltaHtml = '<span style="color:#94a3b8;">--</span>';
+      const prevPt = rev[idx + 1] || null;
+      let cmpHtml = '--';
       if (prevPt) {
         const d = Number((pt.price - prevPt.price).toFixed(2));
-        if (d > 0) deltaHtml = `<span class="text-up" style="font-weight:700;">↑ +${d.toFixed(2)}</span>`;
-        else if (d < 0) deltaHtml = `<span class="text-down" style="font-weight:700;">↓ ${d.toFixed(2)}</span>`;
-        else deltaHtml = `<span class="text-flat">持平 0.00</span>`;
+        if (d > 0) cmpHtml = `<span class="text-up" style="font-weight:700;">↑ +${d}</span>`;
+        else if (d < 0) cmpHtml = `<span class="text-down" style="font-weight:700;">↓ ${d}</span>`;
+        else cmpHtml = `持平`;
       }
-      const noteText = [pt.note, pt.updatedBy ? `(${pt.updatedBy})` : ''].filter(Boolean).join(' ') || '-';
+      const perText = calcUnitBreakdownText(sp, pt.price) || '-';
       return `
         <tr>
           <td><strong>${pt.date}</strong></td>
-          <td>¥${pt.price.toFixed(2)} <span style="color:#94a3b8;font-size:11px;">${escapeHtml(fruit.unit)}</span></td>
-          <td>${deltaHtml}</td>
-          <td style="color:#64748b;">${escapeHtml(noteText)}</td>
+          <td>¥${pt.price} <span style="color:#94a3b8;font-size:11px;">${escapeHtml(sp.unit)}</span></td>
+          <td style="color:#0284c7;">${escapeHtml(perText)}</td>
+          <td>${cmpHtml}</td>
         </tr>
       `;
     })
     .join('');
 }
 
-// ==================== TAB 3: 水果品种与团队成员管理 ====================
-function renderManageFruitsTab() {
-  const listEl = document.getElementById('manageFruitList');
-  const adminMode = isAdmin();
-
-  if (appState.fruits.length === 0) {
-    listEl.innerHTML = `<div class="empty-state">暂无水果品种</div>`;
-  } else {
-    listEl.innerHTML = appState.fruits
-      .map(
-        (f, idx) => `
-        <div class="manage-item">
-          <div class="manage-item-left">
-            <span style="font-size:24px;">${f.emoji || '🍎'}</span>
-            <div>
-              <div style="font-weight:700;font-size:14px;">${escapeHtml(f.name)}</div>
-              <div style="font-size:11px;color:#64748b;">分类：${escapeHtml(f.category || '日常水果')} ｜ 默认单位：${escapeHtml(f.unit)}</div>
-            </div>
-          </div>
-          ${
-            adminMode
-              ? `<div class="manage-item-actions">
-                  ${idx > 0 ? `<button class="btn-sm" data-action="move-up" data-idx="${idx}" title="上移">↑</button>` : ''}
-                  <button class="btn-sm" data-action="edit-fruit" data-id="${f.id}">编辑</button>
-                  <button class="btn-sm danger" data-action="delete-fruit" data-id="${f.id}">删除</button>
-                </div>`
-              : `<span class="fruit-unit-static">只读</span>`
-          }
-        </div>
-      `
-      )
-      .join('');
-  }
-
-  if (adminMode) {
-    listEl.querySelectorAll('button[data-action="move-up"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const idx = Number(btn.dataset.idx);
-        if (idx > 0) {
-          const temp = appState.fruits[idx - 1];
-          appState.fruits[idx - 1] = appState.fruits[idx];
-          appState.fruits[idx] = temp;
-          saveDataToStorage();
-          renderManageFruitsTab();
-          renderDailyFruitList();
-        }
-      });
-    });
-
-    listEl.querySelectorAll('button[data-action="edit-fruit"]').forEach((btn) => {
-      btn.addEventListener('click', () => openFruitModal(btn.dataset.id));
-    });
-
-    listEl.querySelectorAll('button[data-action="delete-fruit"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const id = btn.dataset.id;
-        const fruit = appState.fruits.find((f) => f.id === id);
-        if (!fruit) return;
-        if (confirm(`确定要删除水果品种「${fruit.name}」吗？`)) {
-          appState.fruits = appState.fruits.filter((f) => f.id !== id);
-          saveDataToStorage();
-          renderManageFruitsTab();
-          renderCategoryBar();
-          renderDateBarAndStats();
-          renderDailyFruitList();
-          showToast(`🗑️ 已删除「${fruit.name}」`);
-        }
-      });
-    });
-  }
-
-  // 渲染团队成员列表
-  const memberListEl = document.getElementById('teamMemberList');
-  if (memberListEl) {
-    memberListEl.innerHTML = appState.users
-      .map((u) => {
-        const isCur = appState.currentUser && appState.currentUser.account === u.account;
-        const roleLabel = u.role === 'admin' ? '👑 采购管理员 (可录价/改价)' : '👀 普通成员 (只读看价)';
-        return `
-          <div class="manage-item">
-            <div class="manage-item-left">
-              <span style="font-size:22px;">${u.role === 'admin' ? '👑' : '👤'}</span>
-              <div>
-                <div style="font-weight:700;font-size:13px;">
-                  ${escapeHtml(u.name)} ${isCur ? '<span style="color:#10b981;font-size:11px;">(当前登录)</span>' : ''}
-                </div>
-                <div style="font-size:11px;color:#64748b;">账号：${escapeHtml(u.account)} ｜ ${roleLabel}</div>
-              </div>
-            </div>
-            <div class="manage-item-actions">
-              ${
-                !isCur
-                  ? `<button class="btn-sm" data-action="quick-switch-user" data-account="${escapeHtml(u.account)}">切换此号</button>`
-                  : ''
-              }
-              ${
-                adminMode && !isCur
-                  ? `<button class="btn-sm" data-action="toggle-user-role" data-account="${escapeHtml(u.account)}">
-                      ${u.role === 'admin' ? '设为只读' : '设为管理员'}
-                    </button>`
-                  : ''
-              }
-            </div>
-          </div>
-        `;
-      })
-      .join('');
-
-    memberListEl.querySelectorAll('button[data-action="quick-switch-user"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const target = appState.users.find((u) => u.account === btn.dataset.account);
-        if (target) {
-          loginWithUser(target, target.storeCode);
-          showToast(`🔄 已切换为「${target.name}」`);
-        }
-      });
-    });
-
-    memberListEl.querySelectorAll('button[data-action="toggle-user-role"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const target = appState.users.find((u) => u.account === btn.dataset.account);
-        if (target) {
-          target.role = target.role === 'admin' ? 'viewer' : 'admin';
-          saveUsersToStorage();
-          renderManageFruitsTab();
-          showToast(`✅ 已更新「${target.name}」的角色权限`);
-        }
-      });
-    });
-  }
-}
-
-// ==================== 新增/编辑水果 Modal 逻辑 ====================
-function renderEmojiPicker() {
-  const grid = document.getElementById('emojiPickerGrid');
-  grid.innerHTML = EMOJI_LIST.map(
-    (em) => `
-      <button type="button" class="emoji-option ${appState.selectedEmoji === em ? 'selected' : ''}" data-emoji="${em}">
-        ${em}
-      </button>
-    `
-  ).join('');
-
-  grid.querySelectorAll('.emoji-option').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      appState.selectedEmoji = btn.dataset.emoji;
-      renderEmojiPicker();
-    });
-  });
-}
-
-function openFruitModal(editFruitId = null) {
-  if (!isAdmin()) {
-    showToast('🔒 仅管理员可添加或编辑水果品种');
-    return;
-  }
-  const overlay = document.getElementById('fruitModalOverlay');
-  const titleEl = document.getElementById('fruitModalTitle');
-  const idInput = document.getElementById('editFruitIdInput');
-  const nameInput = document.getElementById('fruitNameInput');
-  const unitSelect = document.getElementById('fruitUnitSelect');
-  const catSelect = document.getElementById('fruitCategorySelect');
-  const initPriceGroup = document.getElementById('initialPriceGroup');
-  const initPriceInput = document.getElementById('fruitInitPriceInput');
-
-  if (editFruitId) {
-    const f = appState.fruits.find((item) => item.id === editFruitId);
-    if (!f) return;
-    titleEl.textContent = '编辑水果品种';
-    idInput.value = f.id;
-    nameInput.value = f.name;
-    unitSelect.value = f.unit;
-    catSelect.value = f.category || '日常水果';
-    appState.selectedEmoji = f.emoji || '🍎';
-    initPriceGroup.classList.add('hidden');
-  } else {
-    titleEl.textContent = '新增水果品种';
-    idInput.value = '';
-    nameInput.value = '';
-    unitSelect.value = '元/斤';
-    catSelect.value = '日常水果';
-    appState.selectedEmoji = '🍎';
-    initPriceInput.value = '';
-    initPriceGroup.classList.remove('hidden');
-  }
-
-  renderEmojiPicker();
-  overlay.classList.remove('hidden');
-  setTimeout(() => nameInput.focus(), 80);
-}
-
-function closeFruitModal() {
-  document.getElementById('fruitModalOverlay').classList.add('hidden');
-}
-
-function saveFruitFromModal() {
-  const editId = document.getElementById('editFruitIdInput').value.trim();
-  const name = document.getElementById('fruitNameInput').value.trim();
-  const unit = document.getElementById('fruitUnitSelect').value;
-  const category = document.getElementById('fruitCategorySelect').value;
-  const initPrice = document.getElementById('fruitInitPriceInput').value.trim();
-
-  if (!name) {
-    showToast('⚠️ 请输入水果名称');
-    return;
-  }
-
-  if (editId) {
-    const f = appState.fruits.find((item) => item.id === editId);
-    if (f) {
-      f.name = name;
-      f.unit = unit;
-      f.category = category;
-      f.emoji = appState.selectedEmoji;
-    }
-    showToast(`✅ 已更新「${name}」`);
-  } else {
-    const newId = 'f_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-    appState.fruits.unshift({
-      id: newId,
-      name,
-      emoji: appState.selectedEmoji,
-      unit,
-      category
-    });
-    if (initPrice !== '' && !isNaN(Number(initPrice))) {
-      setFruitPrice(appState.selectedDate, newId, Number(initPrice), '新增录入');
-    }
-    showToast(`🎉 已添加新品种「${name}」`);
-  }
-
-  saveDataToStorage();
-  closeFruitModal();
-  renderCategoryBar();
-  renderDateBarAndStats();
-  renderDailyFruitList();
-  renderManageFruitsTab();
-}
-
-// ==================== Excel(CSV) 导出与 JSON 备份恢复 ====================
-function exportToCsv() {
-  const rows = [
-    ['日期', '水果名称', '所属分类', '当日成本价', '计价单位', '前次参考价', '涨跌金额(元)', '涨跌幅度(%)', '备注', '录入人']
-  ];
-
-  const sortedDates = Object.keys(appState.records).sort((a, b) => (a > b ? -1 : 1));
-  sortedDates.forEach((dateStr) => {
-    appState.fruits.forEach((f) => {
-      const curRec = getPriceRecord(dateStr, f.id);
-      if (!curRec) return;
-      const prevInfo = getPreviousRecordedPrice(dateStr, f.id);
-      const cmp = calculateComparison(curRec.price, prevInfo);
-      rows.push([
-        dateStr,
-        f.name,
-        f.category || '',
-        curRec.price.toFixed(2),
-        f.unit,
-        prevInfo ? prevInfo.price.toFixed(2) : '',
-        prevInfo ? cmp.diff.toFixed(2) : '',
-        prevInfo ? `${cmp.pct}%` : '',
-        curRec.note || '',
-        curRec.updatedBy || ''
-      ]);
-    });
-  });
-
-  if (rows.length <= 1) {
-    showToast('⚠️ 当前暂无可导出的价格记录');
-    return;
-  }
-
-  const csvContent =
-    '\uFEFF' +
-    rows
-      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-      .join('\r\n');
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `水果成本价格表_${getTodayStr()}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast('📊 已导出 Excel (CSV) 报表！');
-}
-
-function exportToJsonBackup() {
-  const payload = {
-    appName: '水果成本记账',
-    version: '2.0.0',
-    exportedAt: new Date().toISOString(),
-    fruits: appState.fruits,
-    records: appState.records
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `水果成本记账备份_${getTodayStr()}.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast('💾 备份文件已导出！');
-}
-
-function importFromJsonBackup(file) {
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const parsed = JSON.parse(e.target.result);
-      if (!Array.isArray(parsed.fruits) || typeof parsed.records !== 'object') {
-        showToast('❌ 备份文件格式不正确');
-        return;
-      }
-      appState.fruits = parsed.fruits;
-      appState.records = parsed.records;
-      saveDataToStorage();
-      renderAll();
-      showToast(`✅ 成功恢复 ${appState.fruits.length} 种水果与历史价格数据！`);
-    } catch (err) {
-      showToast('❌ 解析备份文件失败');
-    }
-  };
-  reader.readAsText(file, 'utf-8');
-}
-
-// ==================== 联网状态与全员共享云同步 ====================
-function updateNetworkIndicator() {
-  const isOnline = navigator.onLine;
-  const dot = document.getElementById('netDot');
-  const txt = document.getElementById('netText');
-  dot.className = 'net-dot ' + (isOnline ? 'online' : 'offline');
-  txt.textContent = isOnline ? '已联网' : '离线模式';
-}
-
-const DEFAULT_GITHUB_REPO = 'krisawang/fruit-jilu';
-
-function detectGithubRepoFromUrl() {
-  try {
-    // 如果是通过 https://<owner>.github.io/<repo>/ 打开，自动识别仓库名！
-    if (location.hostname.endsWith('.github.io')) {
-      const owner = location.hostname.replace('.github.io', '');
-      const pathParts = location.pathname.split('/').filter(Boolean);
-      if (owner && pathParts.length > 0) {
-        return `${owner}/${pathParts[0]}`;
-      }
-    }
-  } catch (e) {}
-  return DEFAULT_GITHUB_REPO;
-}
-
+// ==================== GitHub 云端同步与 Excel 导出 ====================
 function loadCloudConfig() {
   try {
-    const autoRepo = detectGithubRepoFromUrl();
     const raw = localStorage.getItem(CLOUD_CONFIG_KEY);
-    const repoInput = document.getElementById('githubRepoInput');
-    if (!raw) {
-      if (repoInput && autoRepo) repoInput.value = autoRepo;
-      return;
-    }
+    if (!raw) return;
     const cfg = JSON.parse(raw);
-    if (repoInput) repoInput.value = cfg.githubRepo || autoRepo || '';
-    document.getElementById('cloudEndpointInput').value = cfg.endpoint || '';
+    document.getElementById('githubRepoInput').value = cfg.githubRepo || DEFAULT_GITHUB_REPO;
     document.getElementById('cloudApiKeyInput').value = cfg.apiKey || '';
     if (cfg.lastSyncText) {
       document.getElementById('cloudSyncStatusText').textContent = cfg.lastSyncText;
@@ -1408,12 +891,10 @@ function loadCloudConfig() {
 }
 
 function saveCloudConfig() {
-  const repoEl = document.getElementById('githubRepoInput');
-  const githubRepo = repoEl ? repoEl.value.trim() : '';
-  const endpoint = document.getElementById('cloudEndpointInput').value.trim();
+  const githubRepo = document.getElementById('githubRepoInput').value.trim() || DEFAULT_GITHUB_REPO;
   const apiKey = document.getElementById('cloudApiKeyInput').value.trim();
-  localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify({ githubRepo, endpoint, apiKey }));
-  showToast('✅ GitHub / 云端共享配置已保存');
+  localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify({ githubRepo, apiKey }));
+  showToast('💾 同步配置已保存');
 }
 
 function utf8ToBase64(str) {
@@ -1424,207 +905,146 @@ function base64ToUtf8(b64) {
   return decodeURIComponent(escape(atob(b64.replace(/\s/g, ''))));
 }
 
-async function syncWithGithubRepo(githubRepo, token, mode = 'upload') {
+async function syncWithGithub(mode = 'download', silent = false) {
+  const githubRepo = document.getElementById('githubRepoInput').value.trim() || DEFAULT_GITHUB_REPO;
+  const token = document.getElementById('cloudApiKeyInput').value.trim();
   const statusEl = document.getElementById('cloudSyncStatusText');
   const apiUrl = `https://api.github.com/repos/${githubRepo}/contents/www/shared-data.json`;
 
   if (mode === 'upload') {
     if (!token) {
-      showToast('⚠️ 管理员发布报价到 GitHub 需填写 GitHub Token');
+      showToast('⚠️ 首次发布价格请先填写 GitHub Token');
+      switchTab('tab-settings');
       return;
     }
-    statusEl.textContent = `⏳ 正在将最新价格发布到 GitHub (${githubRepo})...`;
-    const headers = {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-
-    // 1. 先获取当前 shared-data.json 的 sha
-    let sha = undefined;
-    const getRes = await fetch(apiUrl, { method: 'GET', headers, cache: 'no-store' });
-    if (getRes.ok) {
-      const fileInfo = await getRes.json();
-      sha = fileInfo.sha;
-    }
-
-    // 2. 提交更新后的价格数据到 GitHub 仓库
-    const contentObj = {
-      appName: '水果成本记账',
-      updatedBy: appState.currentUser ? appState.currentUser.name : '采购管理员',
-      syncedAt: new Date().toISOString(),
-      fruits: appState.fruits,
-      records: appState.records
-    };
-    const bodyPayload = {
-      message: `📢 更新每日水果报价 (${getTodayStr()})`,
-      content: utf8ToBase64(JSON.stringify(contentObj, null, 2))
-    };
-    if (sha) bodyPayload.sha = sha;
-
-    const putRes = await fetch(apiUrl, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(bodyPayload)
-    });
-    if (!putRes.ok) {
-      throw new Error(`GitHub API ${putRes.status}`);
-    }
-    const msg = `✅ 已发布至 GitHub (${githubRepo})：${new Date().toLocaleString()}`;
-    statusEl.textContent = msg;
-    localStorage.setItem(
-      CLOUD_CONFIG_KEY,
-      JSON.stringify({ githubRepo, endpoint: '', apiKey: token, lastSyncText: msg })
-    );
-    showToast('📢 今日报价已成功发布到 GitHub，所有人均可查看！');
-  } else {
-    statusEl.textContent = `⏳ 正在从 GitHub (${githubRepo}) 同步最新报价...`;
-    // 优先通过 GitHub API 或 jsDelivr CDN / 同源 shared-data.json 拉取（无需Token，店员直接可读）
-    let payload = null;
+    statusEl.textContent = '⏳ 正在发布最新价格到 GitHub...';
     try {
+      const headers = {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      };
+      let sha = undefined;
+      const getRes = await fetch(apiUrl, { method: 'GET', headers, cache: 'no-store' });
+      if (getRes.ok) {
+        const info = await getRes.json();
+        sha = info.sha;
+      }
+      const contentObj = {
+        version: '3.0',
+        syncedAt: new Date().toISOString(),
+        specs: appState.specs,
+        records: appState.records
+      };
+      const putRes = await fetch(apiUrl, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          message: `更新每日水果价格 (${getTodayStr()})`,
+          content: utf8ToBase64(JSON.stringify(contentObj, null, 2)),
+          ...(sha ? { sha } : {})
+        })
+      });
+      if (!putRes.ok) throw new Error(`HTTP ${putRes.status}`);
+      const msg = `✅ 已发布最新价格：${new Date().toLocaleString()}`;
+      statusEl.textContent = msg;
+      localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify({ githubRepo, apiKey: token, lastSyncText: msg }));
+      showToast('📢 最新价格已发布，所有人打开均可看到！');
+    } catch (err) {
+      statusEl.textContent = `❌ 发布失败: ${err.message}`;
+      showToast(`❌ 发布失败: ${err.message}`);
+    }
+  } else {
+    if (!silent) statusEl.textContent = '⏳ 正在同步最新价格...';
+    try {
+      let payload = null;
       const headers = { Accept: 'application/vnd.github+json' };
       if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch(`${apiUrl}?t=${Date.now()}`, { method: 'GET', headers, cache: 'no-store' });
       if (res.ok) {
         const fileData = await res.json();
-        if (fileData.content) {
-          payload = JSON.parse(base64ToUtf8(fileData.content));
-        }
+        if (fileData.content) payload = JSON.parse(base64ToUtf8(fileData.content));
       }
-    } catch (e) {}
-
-    if (!payload) {
-      // 国内免代理 CDN 加速备用通道
-      const cdnUrl = `https://cdn.jsdelivr.net/gh/${githubRepo}@main/www/shared-data.json?t=${Date.now()}`;
-      const cdnRes = await fetch(cdnUrl, { cache: 'no-store' });
-      if (cdnRes.ok) {
-        payload = await cdnRes.json();
+      if (!payload) {
+        const cdnRes = await fetch(`https://cdn.jsdelivr.net/gh/${githubRepo}@main/www/shared-data.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (cdnRes.ok) payload = await cdnRes.json();
       }
+      if (payload && Array.isArray(payload.specs) && payload.specs.length > 0) {
+        appState.specs = payload.specs;
+        appState.records = payload.records || {};
+        saveDataToStorage(false);
+        renderAll();
+        const msg = `✅ 已同步最新价格：${new Date().toLocaleTimeString()}`;
+        statusEl.textContent = msg;
+        if (!silent) showToast('🔄 已同步最新价格表！');
+      }
+    } catch (err) {
+      if (!silent) showToast('ℹ️ 已显示当前最新本地价格');
     }
-
-    if (!payload || !Array.isArray(payload.fruits) || payload.fruits.length === 0) {
-      throw new Error('仓库中暂无已发布的报价数据');
-    }
-
-    appState.fruits = payload.fruits;
-    appState.records = payload.records || {};
-    saveDataToStorage(false);
-    renderAll();
-    const msg = `✅ 已从 GitHub 同步最新报价 (${payload.updatedBy || '管理员'} 发布于 ${new Date().toLocaleTimeString()})`;
-    statusEl.textContent = msg;
-    showToast('🔄 已从 GitHub 同步最新水果价格！');
   }
 }
 
-async function syncToCloud(mode = 'upload') {
-  const repoEl = document.getElementById('githubRepoInput');
-  const githubRepo = (repoEl ? repoEl.value.trim() : '') || detectGithubRepoFromUrl();
-  const customEndpoint = document.getElementById('cloudEndpointInput').value.trim();
-  const apiKey = document.getElementById('cloudApiKeyInput').value.trim();
+function exportToCsv() {
+  const rows = [['日期', '水果名称', '品种与规格', '当日成本价', '计价单位', '折合单价', '昨日参考价', '涨跌对比']];
+  const sortedDates = Object.keys(appState.records).sort((a, b) => (a > b ? -1 : 1));
+  sortedDates.forEach((d) => {
+    appState.specs.forEach((sp) => {
+      const curP = getPrice(d, sp.id);
+      if (curP === null) return;
+      const prev = getPrevPriceInfo(d, sp.id);
+      const cmp = calcComparison(curP, prev);
+      rows.push([
+        d,
+        sp.fruitName,
+        sp.specTitle,
+        curP,
+        sp.unit,
+        calcUnitBreakdownText(sp, curP),
+        prev ? prev.price : '',
+        cmp.text
+      ]);
+    });
+  });
 
-  // 如果填写了 GitHub 仓库名（如 zhangsan/fruit-app），直接使用 GitHub 作为免费云数据库！
-  if (githubRepo) {
-    try {
-      await syncWithGithubRepo(githubRepo, apiKey, mode);
-      return;
-    } catch (err) {
-      document.getElementById('cloudSyncStatusText').textContent = `⚠️ GitHub 同步提示：${err.message}`;
-      showToast(`⚠️ ${err.message}`);
-      return;
-    }
-  }
-
-  const endpoint = customEndpoint || (location.protocol.startsWith('http') ? '/api/shared-data' : '');
-  const statusEl = document.getElementById('cloudSyncStatusText');
-
-  if (!endpoint) {
-    loadDataFromStorage();
-    renderAll();
-    const msg = `已完成同机多角色共享同步：${new Date().toLocaleTimeString()}`;
-    statusEl.textContent = msg;
-    showToast(mode === 'upload' ? '📢 已发布最新价格，所有成员登录可见！' : '🔄 已刷新最新报价！');
+  if (rows.length <= 1) {
+    showToast('⚠️ 暂无可导出的价格数据');
     return;
   }
-
-  statusEl.textContent = mode === 'upload' ? '⏳ 正在发布最新报价...' : '⏳ 正在拉取最新报价...';
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (apiKey) {
-    headers['X-Master-Key'] = apiKey;
-    headers['Authorization'] = apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`;
-  }
-
-  try {
-    if (mode === 'upload') {
-      const method = customEndpoint ? 'PUT' : 'POST';
-      const res = await fetch(endpoint, {
-        method,
-        headers,
-        body: JSON.stringify({
-          fruits: appState.fruits,
-          records: appState.records,
-          updatedBy: appState.currentUser ? appState.currentUser.name : '管理员',
-          syncedAt: new Date().toISOString()
-        })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const msg = `上次发布共享成功：${new Date().toLocaleString()}`;
-      statusEl.textContent = msg;
-      localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify({ githubRepo, endpoint: customEndpoint, apiKey, lastSyncText: msg }));
-      showToast('📢 今日价格已发布，所有人均可查看！');
-    } else {
-      const res = await fetch(endpoint, { method: 'GET', headers, cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const payload = data.record || data.data || data;
-      if (!Array.isArray(payload.fruits) || typeof payload.records !== 'object') {
-        throw new Error('返回数据格式不匹配');
-      }
-      appState.fruits = payload.fruits;
-      appState.records = payload.records;
-      saveDataToStorage(false);
-      renderAll();
-      const msg = `上次同步最新报价：${new Date().toLocaleString()}`;
-      statusEl.textContent = msg;
-      localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify({ githubRepo, endpoint: customEndpoint, apiKey, lastSyncText: msg }));
-      showToast('🔄 已同步最新报价！');
-    }
-  } catch (err) {
-    loadDataFromStorage();
-    renderAll();
-    showToast('🔄 已刷新本地最新共享价格表');
-  }
+  const csv = '\uFEFF' + rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `水果每日成本表_${getTodayStr()}.csv`;
+  a.click();
+  showToast('📊 已导出 Excel 表格！');
 }
 
-// ==================== 底部导航切换 ====================
+function exportToJson() {
+  const blob = new Blob([JSON.stringify({ specs: appState.specs, records: appState.records }, null, 2)], {
+    type: 'application/json;charset=utf-8;'
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `水果成本备份_${getTodayStr()}.json`;
+  a.click();
+  showToast('💾 备份已导出');
+}
+
+// ==================== 辅助函数与初始化 ====================
 function switchTab(tabId) {
-  document.querySelectorAll('.tab-page').forEach((sec) => {
-    sec.classList.toggle('active', sec.id === tabId);
-  });
-  document.querySelectorAll('.app-tabbar .tab-item').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.tab === tabId);
-  });
-
-  if (tabId === 'tab-daily') {
-    renderDateBarAndStats();
-    renderDailyFruitList();
-  } else if (tabId === 'tab-trend') {
-    renderTrendTab();
-  } else if (tabId === 'tab-fruits') {
-    renderManageFruitsTab();
-  }
+  document.querySelectorAll('.tab-page').forEach((s) => s.classList.toggle('active', s.id === tabId));
+  document.querySelectorAll('.app-tabbar .tab-item').forEach((b) => b.classList.toggle('active', b.dataset.tab === tabId));
+  if (tabId === 'tab-daily') renderDailyGroupedList();
+  else if (tabId === 'tab-trend') renderTrendTab();
 }
 
-// ==================== 通用辅助函数 ====================
-function showToast(text) {
-  const container = document.getElementById('toastContainer');
+function showToast(msg) {
+  const box = document.getElementById('toastContainer');
   const el = document.createElement('div');
   el.className = 'toast-msg';
-  el.textContent = text;
-  container.appendChild(el);
-  setTimeout(() => {
-    el.remove();
-  }, 2400);
+  el.textContent = msg;
+  box.appendChild(el);
+  setTimeout(() => el.remove(), 2200);
 }
 
 function escapeHtml(str) {
@@ -1636,270 +1056,117 @@ function escapeHtml(str) {
 }
 
 function renderAll() {
-  renderDateBarAndStats();
-  renderCategoryBar();
-  renderDailyFruitList();
+  renderHeaderAndDate();
+  renderFruitFilterBar();
+  renderDailyGroupedList();
   renderTrendTab();
-  renderManageFruitsTab();
 }
 
-// ==================== 登录与注册事件绑定 ====================
-function bindAuthEvents() {
-  const tabLoginBtn = document.getElementById('tabLoginBtn');
-  const tabRegisterBtn = document.getElementById('tabRegisterBtn');
-  const loginForm = document.getElementById('loginForm');
-  const registerForm = document.getElementById('registerForm');
-  const regRoleSelect = document.getElementById('regRoleSelect');
-  const adminSecretGroup = document.getElementById('adminSecretGroup');
-
-  tabLoginBtn.addEventListener('click', () => {
-    tabLoginBtn.classList.add('active');
-    tabRegisterBtn.classList.remove('active');
-    loginForm.classList.remove('hidden');
-    registerForm.classList.add('hidden');
-  });
-
-  tabRegisterBtn.addEventListener('click', () => {
-    tabRegisterBtn.classList.add('active');
-    tabLoginBtn.classList.remove('active');
-    registerForm.classList.remove('hidden');
-    loginForm.classList.add('hidden');
-  });
-
-  regRoleSelect.addEventListener('change', (e) => {
-    adminSecretGroup.classList.toggle('hidden', e.target.value !== 'admin');
-  });
-
-  // 账号密码登录提交
-  loginForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!document.getElementById('agreePrivacyCheckbox').checked) {
-      showToast('⚠️ 请先勾选同意《用户协议与隐私政策》');
-      return;
-    }
-    const account = document.getElementById('loginAccountInput').value.trim();
-    const password = document.getElementById('loginPasswordInput').value.trim();
-    const storeCode = document.getElementById('loginStoreCodeInput').value.trim() || '8888';
-
-    const matched = appState.users.find((u) => u.account === account && u.password === password);
-    if (!matched) {
-      showToast('❌ 账号或密码错误（管理员测试号: 13800000001 / 密码: 123456）');
-      return;
-    }
-    loginWithUser(matched, storeCode);
-    showToast(`🎉 欢迎回来，${matched.name}！`);
-  });
-
-  // 注册新账号提交
-  registerForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = document.getElementById('regNameInput').value.trim();
-    const account = document.getElementById('regAccountInput').value.trim();
-    const password = document.getElementById('regPasswordInput').value.trim();
-    const role = document.getElementById('regRoleSelect').value;
-    const adminCode = document.getElementById('regAdminCodeInput').value.trim();
-
-    if (!name || !account || !password) {
-      showToast('⚠️ 请完整填写姓名、账号和密码');
-      return;
-    }
-    if (appState.users.some((u) => u.account === account)) {
-      showToast('⚠️ 该手机号/账号已注册，请直接登录');
-      return;
-    }
-    if (role === 'admin' && adminCode !== '6666') {
-      showToast('❌ 管理员授权码不正确（默认授权码：6666）');
-      return;
-    }
-
-    const newUser = {
-      id: 'u_' + Date.now(),
-      account,
-      password,
-      name,
-      role,
-      storeCode: '8888'
-    };
-    appState.users.push(newUser);
-    saveUsersToStorage();
-    loginWithUser(newUser, '8888');
-    showToast(`🎉 注册成功！已登录为「${name}」`);
-  });
-
-  // 快捷一键体验管理员 / 普通店员
-  document.getElementById('demoAdminLoginBtn').addEventListener('click', () => {
-    const adminUser = appState.users.find((u) => u.role === 'admin') || DEFAULT_USERS[0];
-    loginWithUser(adminUser, '8888');
-    showToast('👑 已使用「采购管理员」身份登录（可录入/修改价格）');
-  });
-
-  document.getElementById('demoViewerLoginBtn').addEventListener('click', () => {
-    const viewerUser = appState.users.find((u) => u.role === 'viewer') || DEFAULT_USERS[1];
-    loginWithUser(viewerUser, '8888');
-    showToast('👀 已使用「普通店员」身份登录（只读查看价格，防止误改）');
-  });
-
-  // 顶部与设置页切换账号/退出登录
-  document.getElementById('userProfileBtn').addEventListener('click', () => {
-    logoutCurrentUser();
-  });
-  document.getElementById('logoutBtn').addEventListener('click', () => {
-    logoutCurrentUser();
-    showToast('👋 已退出登录');
-  });
-  document.getElementById('switchAccountInTabBtn').addEventListener('click', () => {
-    logoutCurrentUser();
-  });
-
-  // 电脑端顶部快速切换角色视角按钮
-  const quickSwitchRoleBtn = document.getElementById('quickSwitchRoleBtn');
-  if (quickSwitchRoleBtn) {
-    quickSwitchRoleBtn.addEventListener('click', () => {
-      if (isAdmin()) {
-        const viewerUser = appState.users.find((u) => u.role === 'viewer') || DEFAULT_USERS[1];
-        loginWithUser(viewerUser, '8888');
-        showToast('👀 已切换至「普通成员/店员」只读视角');
-      } else {
-        const adminUser = appState.users.find((u) => u.role === 'admin') || DEFAULT_USERS[0];
-        loginWithUser(adminUser, '8888');
-        showToast('👑 已切换至「采购管理员」可编辑视角');
-      }
-    });
-  }
-
-  // 隐私政策弹窗
-  const privacyModal = document.getElementById('privacyModalOverlay');
-  document.getElementById('openPrivacyModalLink').addEventListener('click', () => {
-    privacyModal.classList.remove('hidden');
-  });
-  document.getElementById('closePrivacyModalBtn').addEventListener('click', () => {
-    privacyModal.classList.add('hidden');
-  });
-  document.getElementById('acceptPrivacyBtn').addEventListener('click', () => {
-    document.getElementById('agreePrivacyCheckbox').checked = true;
-    privacyModal.classList.add('hidden');
-  });
-}
-
-// ==================== 初始化与全局事件绑定 ====================
 function initApp() {
   loadDataFromStorage();
-  loadUsersAndSession();
   loadCloudConfig();
-  updateNetworkIndicator();
-  bindAuthEvents();
 
-  window.addEventListener('online', () => {
-    updateNetworkIndicator();
-    showToast('🟢 网络已连接');
-  });
-  window.addEventListener('offline', () => {
-    updateNetworkIndicator();
-    showToast('⚪ 已切换至离线模式');
-  });
-
-  // 底部 Tab 切换
-  document.querySelectorAll('.app-tabbar .tab-item').forEach((btn) => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  // 顶部「记价中 / 只看模式」一键切换
+  document.getElementById('modeToggleBtn').addEventListener('click', () => {
+    appState.editMode = !appState.editMode;
+    renderHeaderAndDate();
+    renderDailyGroupedList();
+    showToast(appState.editMode ? '✏️ 已切换为「直接记价模式」' : '👀 已切换为「只读看价模式」（防误触）');
   });
 
   // 日期控制
   document.getElementById('prevDayBtn').addEventListener('click', () => {
     appState.selectedDate = addDays(appState.selectedDate, -1);
-    renderDateBarAndStats();
-    renderDailyFruitList();
+    renderHeaderAndDate();
+    renderDailyGroupedList();
   });
-
   document.getElementById('nextDayBtn').addEventListener('click', () => {
     appState.selectedDate = addDays(appState.selectedDate, 1);
-    renderDateBarAndStats();
-    renderDailyFruitList();
+    renderHeaderAndDate();
+    renderDailyGroupedList();
   });
-
   document.getElementById('selectedDateInput').addEventListener('change', (e) => {
     if (e.target.value) {
       appState.selectedDate = e.target.value;
-      renderDateBarAndStats();
-      renderDailyFruitList();
+      renderHeaderAndDate();
+      renderDailyGroupedList();
     }
   });
-
   document.getElementById('backTodayBtn').addEventListener('click', () => {
     appState.selectedDate = getTodayStr();
-    renderDateBarAndStats();
-    renderDailyFruitList();
-    showToast('📅 已回到今天');
+    renderHeaderAndDate();
+    renderDailyGroupedList();
   });
 
-  // 4宫格状态筛选
-  document.querySelectorAll('.summary-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      const targetFilter = card.dataset.filter;
-      appState.statusFilter = appState.statusFilter === targetFilter ? 'all' : targetFilter;
-      renderDateBarAndStats();
-      renderDailyFruitList();
-    });
-  });
-
-  // 搜索框
+  // 搜索与一键沿用昨日
   const searchInput = document.getElementById('fruitSearchInput');
-  const clearSearchBtn = document.getElementById('clearSearchBtn');
+  const clearBtn = document.getElementById('clearSearchBtn');
   searchInput.addEventListener('input', (e) => {
     appState.searchQuery = e.target.value;
-    clearSearchBtn.classList.toggle('hidden', !appState.searchQuery);
-    renderDailyFruitList();
+    clearBtn.classList.toggle('hidden', !appState.searchQuery);
+    renderDailyGroupedList();
   });
-  clearSearchBtn.addEventListener('click', () => {
+  clearBtn.addEventListener('click', () => {
     appState.searchQuery = '';
     searchInput.value = '';
-    clearSearchBtn.classList.add('hidden');
-    renderDailyFruitList();
+    clearBtn.classList.add('hidden');
+    renderDailyGroupedList();
   });
 
-  // 一键将当日未录品种沿用昨日价格
   document.getElementById('copyYesterdayAllBtn').addEventListener('click', () => {
-    if (!isAdmin()) return;
-    let copied = 0;
-    appState.fruits.forEach((f) => {
-      const curRec = getPriceRecord(appState.selectedDate, f.id);
-      if (!curRec) {
-        const prevInfo = getPreviousRecordedPrice(appState.selectedDate, f.id);
-        if (prevInfo) {
-          setFruitPrice(appState.selectedDate, f.id, prevInfo.price, '');
-          copied++;
+    let count = 0;
+    appState.specs.forEach((sp) => {
+      if (getPrice(appState.selectedDate, sp.id) === null) {
+        const prev = getPrevPriceInfo(appState.selectedDate, sp.id);
+        if (prev) {
+          setSpecPrice(appState.selectedDate, sp.id, prev.price);
+          count++;
         }
       }
     });
-    if (copied > 0) {
-      renderDateBarAndStats();
-      renderDailyFruitList();
-      showToast(`⚡ 已为 ${copied} 个未录入品种填入前一日价格`);
-    } else {
-      showToast('ℹ️ 所有品种今日均已录入或无前日参考价');
+    renderDailyGroupedList();
+    showToast(count > 0 ? `⚡ 已为 ${count} 个未填规格填入昨日价` : 'ℹ️ 今日所有规格均已录入价格');
+  });
+
+  // 添加/编辑规格弹窗事件
+  document.getElementById('topAddSpecBtn').addEventListener('click', () => openSpecModal(null));
+  document.getElementById('bottomAddSpecBtn').addEventListener('click', () => openSpecModal(null));
+  document.getElementById('closeSpecModalBtn').addEventListener('click', closeSpecModal);
+  document.getElementById('cancelSpecModalBtn').addEventListener('click', closeSpecModal);
+  document.getElementById('saveSpecModalBtn').addEventListener('click', saveSpecFromModal);
+
+  document.getElementById('currentEmojiBtn').addEventListener('click', () => {
+    document.getElementById('emojiPickerGrid').classList.toggle('hidden');
+  });
+
+  document.querySelectorAll('.chip-preset').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      document.getElementById('specTitleInput').value = chip.dataset.fill;
+    });
+  });
+
+  document.getElementById('deleteSpecBtn').addEventListener('click', () => {
+    const editId = document.getElementById('editSpecIdInput').value;
+    const sp = appState.specs.find((s) => s.id === editId);
+    if (sp && confirm(`确定删除「${sp.fruitName} - ${sp.specTitle}」吗？`)) {
+      appState.specs = appState.specs.filter((s) => s.id !== editId);
+      saveDataToStorage(true);
+      closeSpecModal();
+      renderAll();
+      showToast('🗑️ 已删除该规格');
     }
   });
 
-  // 顶部同步按钮
-  document.getElementById('syncNowHeaderBtn').addEventListener('click', () => {
-    syncToCloud('download');
-  });
-  document.getElementById('networkStatusPill').addEventListener('click', () => {
-    syncToCloud('download');
+  // 底部导航
+  document.querySelectorAll('.app-tabbar .tab-item').forEach((btn) => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
-  // 新增水果弹窗绑定
-  document.getElementById('headerAddFruitBtn').addEventListener('click', () => openFruitModal(null));
-  document.getElementById('openAddFruitModalBtn').addEventListener('click', () => openFruitModal(null));
-  document.getElementById('closeFruitModalBtn').addEventListener('click', closeFruitModal);
-  document.getElementById('cancelFruitModalBtn').addEventListener('click', closeFruitModal);
-  document.getElementById('saveFruitModalBtn').addEventListener('click', saveFruitFromModal);
-
-  // 趋势页切换
+  // 趋势页
   document.getElementById('trendFruitSelect').addEventListener('change', (e) => {
-    appState.trendFruitId = e.target.value;
+    appState.trendSpecId = e.target.value;
     renderTrendTab();
   });
-
   document.querySelectorAll('#trendPeriodTabs .period-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('#trendPeriodTabs .period-btn').forEach((b) => b.classList.remove('active'));
@@ -1909,59 +1176,85 @@ function initApp() {
     });
   });
 
-  // 导出与备份
+  // 同步与导出
+  document.getElementById('saveCloudConfigBtn').addEventListener('click', saveCloudConfig);
+  document.getElementById('uploadCloudBtn').addEventListener('click', () => syncWithGithub('upload', false));
+  document.getElementById('downloadCloudBtn').addEventListener('click', () => syncWithGithub('download', false));
   document.getElementById('exportCsvBtn').addEventListener('click', exportToCsv);
   document.getElementById('quickExportCsvBtn').addEventListener('click', exportToCsv);
-  document.getElementById('exportJsonBtn').addEventListener('click', exportToJsonBackup);
+  document.getElementById('exportJsonBtn').addEventListener('click', exportToJson);
+
   document.getElementById('importJsonFileInput').addEventListener('change', (e) => {
-    if (e.target.files && e.target.files[0]) {
-      importFromJsonBackup(e.target.files[0]);
-      e.target.value = '';
-    }
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (Array.isArray(parsed.specs)) {
+          appState.specs = parsed.specs;
+          appState.records = parsed.records || {};
+          saveDataToStorage(true);
+          renderAll();
+          showToast('✅ 已恢复备份数据');
+        }
+      } catch (err) {
+        showToast('❌ 备份文件格式有误');
+      }
+    };
+    reader.readAsText(file, 'utf-8');
   });
 
-  // 云端同步按钮
-  document.getElementById('saveCloudConfigBtn').addEventListener('click', saveCloudConfig);
-  document.getElementById('uploadCloudBtn').addEventListener('click', () => syncToCloud('upload'));
-  document.getElementById('downloadCloudBtn').addEventListener('click', () => syncToCloud('download'));
-
-  // 演示数据清理与重置
   document.getElementById('clearPricesOnlyBtn').addEventListener('click', () => {
-    if (!isAdmin()) return;
-    if (confirm('确定要清空所有历史价格记录吗？（您添加的水果品种将保留，方便从零开始正式记账）')) {
+    if (confirm('确定清空历史价格记录（保留您设置好的水果与规格）？')) {
       appState.records = {};
-      saveDataToStorage();
+      saveDataToStorage(true);
       renderAll();
-      showToast('🧹 已清空历史价格记录，水果品种已保留');
+      showToast('🧹 已清空价格记录');
     }
   });
 
   document.getElementById('resetDemoDataBtn').addEventListener('click', () => {
-    if (!isAdmin()) return;
-    if (confirm('确定要恢复默认演示水果和近7天示例价格数据吗？')) {
+    if (confirm('恢复默认示例（含蓝莓L25、维纳斯苹果各规格）？')) {
       const demo = createDefaultDemoData();
-      appState.fruits = demo.fruits;
+      appState.specs = demo.specs;
       appState.records = demo.records;
-      appState.selectedDate = getTodayStr();
-      saveDataToStorage();
+      saveDataToStorage(true);
       renderAll();
-      showToast('🔄 已恢复默认演示数据');
+      showToast('🔄 已恢复示例数据');
     }
   });
 
-  // 电脑端切换手机边框/全宽预览
   document.getElementById('toggleFrameBtn').addEventListener('click', () => {
     document.body.classList.toggle('phone-preview-mode');
-    const isPhone = document.body.classList.contains('phone-preview-mode');
-    document.getElementById('toggleFrameBtn').textContent = isPhone ? '🖥️ 切换全宽视图' : '📱 切换手机外壳';
   });
 
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  }
-
-  applyRolePermissionsUI();
   renderAll();
+  syncWithGithub('download', true);
+  checkAndApplyHotfixFromGithub();
+}
+
+/**
+ * 手机 APK 在线热更新引擎：
+ * 安装此次新版 APK 后，后续在电脑上修改界面或逻辑并上传 GitHub，手机打开 App 会自动拉取最新脚本热更新，无需重新下载安装 APK！
+ */
+async function checkAndApplyHotfixFromGithub() {
+  if (!navigator.onLine || window.__HOTFIX_APPLIED__) return;
+  try {
+    const githubRepo = DEFAULT_GITHUB_REPO;
+    const cdnBase = `https://cdn.jsdelivr.net/gh/${githubRepo}@main/www`;
+    const cssRes = await fetch(`${cdnBase}/css/style.css?t=${Date.now()}`, { cache: 'no-store' });
+    if (cssRes.ok) {
+      const cssText = await cssRes.text();
+      let styleEl = document.getElementById('hotfix-live-css');
+      if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'hotfix-live-css';
+        document.head.appendChild(styleEl);
+      }
+      styleEl.textContent = cssText;
+    }
+  } catch (e) {}
 }
 
 document.addEventListener('DOMContentLoaded', initApp);
