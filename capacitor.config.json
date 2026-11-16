@@ -1,0 +1,16 @@
+{
+  "appId": "com.fruitprice.tracker",
+  "appName": "水果成本记账",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "plugins": {
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#10b981"
+    }
+  }
+}
