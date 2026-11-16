@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#10b981" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="水果成本记账" />
+  <title>水果成本记账 - 每日进货价共享与对比 App</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body class="phone-preview-mode">
+  <!-- 电脑端顶部辅助栏（仅在电脑大屏浏览器显示，手机端及打包APK后自动隐藏） -->
+  <div class="desktop-toolbar" id="desktopToolbar">
+    <div class="desktop-toolbar-left">
+      <span class="badge-app">📱 独立手机 App 预览模式</span>
+      <span class="toolbar-tip">支持多角色登录：管理员录入改价，普通成员/店员只读查看今日价格与对比</span>
+    </div>
+    <div class="desktop-toolbar-right">
+      <button class="btn-toolbar" id="quickSwitchRoleBtn" title="快速测试切换管理员/普通店员视角">🔄 切换角色视角</button>
+      <button class="btn-toolbar" id="toggleFrameBtn" title="切换手机边框/全宽视图">🖥️ 切换全宽视图</button>
+      <button class="btn-toolbar btn-toolbar-primary" id="quickExportCsvBtn">📊 导出 Excel(CSV)</button>
+    </div>
+  </div>
+
+  <!-- 手机 App 主容器 -->
+  <div class="app-shell" id="appShell">
+
+    <!-- ==================== 全屏登录/注册页层 ==================== -->
+    <div class="login-screen" id="loginScreen">
+      <div class="login-card">
+        <div class="login-brand">
+          <div class="login-logo">🍎</div>
+          <h2>水果成本记账</h2>
+          <p>每日水果进货价实时共享 · 昨日涨跌对比</p>
+        </div>
+
+        <!-- 登录 / 注册 Tab 切换 -->
+        <div class="auth-tabs">
+          <button class="auth-tab active" data-auth-mode="login" id="tabLoginBtn">账号登录</button>
+          <button class="auth-tab" data-auth-mode="register" id="tabRegisterBtn">注册新账号</button>
+        </div>
+
+        <!-- 登录表单 -->
+        <form id="loginForm" class="auth-form">
+          <div class="form-group">
+            <label for="loginAccountInput">手机号 / 账号</label>
+            <input type="text" id="loginAccountInput" class="text-input" placeholder="请输入手机号或账号" value="13800000001" required />
+          </div>
+          <div class="form-group">
+            <label for="loginPasswordInput">登录密码</label>
+            <input type="password" id="loginPasswordInput" class="text-input" placeholder="请输入密码" value="123456" required />
+          </div>
+          <div class="form-group">
+            <label for="loginStoreCodeInput">店铺/团队共享码 (相同共享码可见同一份价格表)</label>
+            <input type="text" id="loginStoreCodeInput" class="text-input" placeholder="默认：8888" value="8888" />
+          </div>
+
+          <div class="privacy-check-row">
+            <input type="checkbox" id="agreePrivacyCheckbox" checked />
+            <label for="agreePrivacyCheckbox">
+              我已阅读并同意 <a href="javascript:void(0)" id="openPrivacyModalLink">《用户协议与隐私政策》</a>
+            </label>
+          </div>
+
+          <button type="submit" class="btn-login-submit" id="loginSubmitBtn">立即登录</button>
+        </form>
+
+        <!-- 注册表单 (默认隐藏) -->
+        <form id="registerForm" class="auth-form hidden">
+          <div class="form-group">
+            <label for="regNameInput">您的姓名 / 称呼 <span class="req">*</span></label>
+            <input type="text" id="regNameInput" class="text-input" placeholder="例如：张店长、小李(店员)" />
+          </div>
+          <div class="form-group">
+            <label for="regAccountInput">手机号 / 登录账号 <span class="req">*</span></label>
+            <input type="text" id="regAccountInput" class="text-input" placeholder="请输入11位手机号或自定义账号" />
+          </div>
+          <div class="form-group">
+            <label for="regPasswordInput">设置登录密码 <span class="req">*</span></label>
+            <input type="password" id="regPasswordInput" class="text-input" placeholder="请设置6位以上密码" />
+          </div>
+          <div class="form-group">
+            <label for="regRoleSelect">账号角色权限</label>
+            <select id="regRoleSelect" class="select-input">
+              <option value="viewer">👀 普通成员/店员（仅查看价格与涨跌，不可改价）</option>
+              <option value="admin">👑 管理员/采购员（可录入修改每日价格、管理品种）</option>
+            </select>
+          </div>
+          <div class="form-group hidden" id="adminSecretGroup">
+            <label for="regAdminCodeInput">管理员授权码 (默认授权码: 6666)</label>
+            <input type="text" id="regAdminCodeInput" class="text-input" placeholder="输入管理员授权码以开通改价权限" value="6666" />
+          </div>
+          <button type="submit" class="btn-login-submit">注册并登录</button>
+        </form>
+
+        <!-- 快捷一键体验入口 -->
+        <div class="quick-login-divider">
+          <span>快捷登录体验（一键切换不同角色）</span>
+        </div>
+        <div class="quick-login-grid">
+          <button type="button" class="btn-quick-role admin" id="demoAdminLoginBtn">
+            <span class="q-icon">👑</span>
+            <div>
+              <strong>采购管理员登录</strong>
+              <small>可录价/改价/加品种</small>
+            </div>
+          </button>
+          <button type="button" class="btn-quick-role viewer" id="demoViewerLoginBtn">
+            <span class="q-icon">👀</span>
+            <div>
+              <strong>店员/大众查看登录</strong>
+              <small>只读看价格，防误改</small>
+            </div>
+          </button>
+        </div>
+
+        <!-- GitHub 自动构建 APK 直接下载入口 -->
+        <div style="margin-top: 12px; text-align: center;">
+          <a href="./fruit-jilu.apk" download="水果成本记账.apk" class="btn-outline" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;width:100%;justify-content:center;font-size:12px;padding:8px;">
+            📲 下载安卓手机独立安装包 (水果成本记账.apk)
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态栏与顶部导航 -->
+    <header class="app-header">
+      <div class="header-top">
+        <div class="app-brand">
+          <span class="brand-logo">🍎</span>
+          <div>
+            <div class="brand-title-wrap">
+              <h1 class="brand-title">水果成本记账</h1>
+              <span class="store-code-badge" id="headerStoreBadge">店铺#8888</span>
+            </div>
+            <p class="brand-subtitle" id="headerSubtitle">每日进货价实时共享与对比</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div class="network-pill" id="networkStatusPill" title="点击同步最新云端报价">
+            <span class="net-dot online" id="netDot"></span>
+            <span id="netText">已联网</span>
+          </div>
+          <!-- 当前登录用户身份胶囊（点击可切换账号/退出登录） -->
+          <button class="user-role-pill" id="userProfileBtn" title="点击切换账号或退出登录">
+            <span id="currentUserRoleIcon">👑</span>
+            <span id="currentUserNameText">管理员</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 普通成员只读模式提示横幅 / 管理员发布同步横幅 -->
+    <div class="role-status-bar" id="roleStatusBar">
+      <div class="role-bar-left" id="roleBarLeftText">
+        👑 <strong>采购管理员模式</strong>：您修改的价格将实时同步给所有店员查看
+      </div>
+      <div class="role-bar-actions">
+        <button class="btn-role-bar" id="syncNowHeaderBtn">🔄 同步最新价</button>
+        <button class="btn-role-bar admin-only" id="headerAddFruitBtn">＋加品种</button>
+      </div>
+    </div>
+
+    <!-- 主内容滚动区 -->
+    <main class="app-content">
+      <!-- ==================== TAB 1: 今日记价 / 今日价格看板 ==================== -->
+      <section class="tab-page active" id="tab-daily">
+        <!-- 日期切换与历史补录控制器 -->
+        <div class="date-navigator-card">
+          <button class="date-step-btn" id="prevDayBtn" title="前一天">
+            <span>◀</span> 前一天
+          </button>
+          <div class="date-center">
+            <div class="date-input-wrapper">
+              <input type="date" id="selectedDateInput" class="date-picker-input" />
+              <span class="date-tag" id="dateRelationTag">今天</span>
+            </div>
+            <div class="date-compare-hint" id="compareDateHint">
+              对比基准：昨日 (<span id="prevDateText">--</span>)
+            </div>
+          </div>
+          <button class="date-step-btn" id="nextDayBtn" title="后一天">
+            后一天 <span>▶</span>
+          </button>
+        </div>
+
+        <!-- 非今天时显示的快捷回到今天提示条 -->
+        <div class="back-today-banner hidden" id="backTodayBanner">
+          <span>📅 当前正在查看 <strong id="bannerDateStr"></strong> 的成本价</span>
+          <button class="btn-back-today" id="backTodayBtn">回到今天</button>
+        </div>
+
+        <!-- 当日价格对比统计看板 -->
+        <div class="summary-grid">
+          <div class="summary-card" data-filter="all">
+            <div class="summary-label">已出价 / 总品种</div>
+            <div class="summary-value" id="statRecorded">0/0</div>
+          </div>
+          <div class="summary-card up-card" data-filter="up">
+            <div class="summary-label">较前日上涨</div>
+            <div class="summary-value text-up" id="statUpCount">↑ 0</div>
+          </div>
+          <div class="summary-card down-card" data-filter="down">
+            <div class="summary-label">较前日下跌</div>
+            <div class="summary-value text-down" id="statDownCount">↓ 0</div>
+          </div>
+          <div class="summary-card flat-card" data-filter="flat">
+            <div class="summary-label">价格持平</div>
+            <div class="summary-value text-flat" id="statFlatCount">= 0</div>
+          </div>
+        </div>
+
+        <!-- 搜索与快捷操作栏 -->
+        <div class="action-bar">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="fruitSearchInput" placeholder="搜索水果名称、分类或备注..." />
+            <button class="search-clear hidden" id="clearSearchBtn">✕</button>
+          </div>
+          <button class="btn-copy-yesterday admin-only" id="copyYesterdayAllBtn" title="将未填写的品种一键填入昨日价格">
+            ⚡ 沿用昨日价
+          </button>
+        </div>
+
+        <!-- 分类与状态筛选标签栏 -->
+        <div class="category-Scroll" id="categoryFilterBar">
+          <!-- 动态生成筛选按钮 -->
+        </div>
+
+        <!-- 水果每日记价卡片列表 -->
+        <div class="fruit-list" id="dailyFruitList">
+          <!-- 动态渲染水果记价卡片（管理员显示输入框，普通成员显示只读大字报价） -->
+        </div>
+      </section>
+
+      <!-- ==================== TAB 2: 趋势分析 ==================== -->
+      <section class="tab-page" id="tab-trend">
+        <!-- 品种与周期选择器 -->
+        <div class="panel-card">
+          <div class="trend-controls">
+            <div class="control-group">
+              <label for="trendFruitSelect">选择水果品种</label>
+              <select id="trendFruitSelect" class="select-input"></select>
+            </div>
+            <div class="period-tabs" id="trendPeriodTabs">
+              <button class="period-btn active" data-days="7">近7天</button>
+              <button class="period-btn" data-days="14">近14天</button>
+              <button class="period-btn" data-days="30">近30天</button>
+              <button class="period-btn" data-days="90">全部</button>
+            </div>
+          </div>
+
+          <!-- 该品种统计指标 -->
+          <div class="trend-stats-row">
+            <div class="trend-stat-item">
+              <span class="t-label">最新成本</span>
+              <strong class="t-val" id="trendLatestPrice">--</strong>
+            </div>
+            <div class="trend-stat-item">
+              <span class="t-label">最高价</span>
+              <strong class="t-val text-up" id="trendMaxPrice">--</strong>
+            </div>
+            <div class="trend-stat-item">
+              <span class="t-label">最低价</span>
+              <strong class="t-val text-down" id="trendMinPrice">--</strong>
+            </div>
+            <div class="trend-stat-item">
+              <span class="t-label">周期均价</span>
+              <strong class="t-val" id="trendAvgPrice">--</strong>
+            </div>
+          </div>
+
+          <!-- 折线图区域 -->
+          <div class="chart-container" id="chartContainer">
+            <!-- 动态渲染 SVG 趋势图 -->
+          </div>
+        </div>
+
+        <!-- 当日全品种涨跌龙虎榜 -->
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3 class="panel-title">📊 当日涨跌对比排行 (<span id="rankingDateLabel">今天</span>)</h3>
+          </div>
+          <div class="ranking-list" id="dailyRankingList">
+            <!-- 动态生成今日涨跌排行 -->
+          </div>
+        </div>
+
+        <!-- 该品种历史报价明细表 -->
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3 class="panel-title">🗓️ <span id="historyTableFruitName">水果</span> 历史成本记录</h3>
+          </div>
+          <div class="history-table-wrap">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>成本价</th>
+                  <th>较前次变化</th>
+                  <th>备注/录入人</th>
+                </tr>
+              </thead>
+              <tbody id="fruitHistoryTableBody">
+                <!-- 动态生成 -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 3: 品种与成员管理 ==================== -->
+      <section class="tab-page" id="tab-fruits">
+        <div class="panel-card">
+          <div class="panel-header-flex">
+            <div>
+              <h3 class="panel-title">🍇 水果品种库</h3>
+              <p class="panel-desc" id="manageFruitDesc">管理员可自由添加新水果、修改计价单位（斤/公斤/箱/件）或调整分类</p>
+            </div>
+            <button class="btn-primary admin-only" id="openAddFruitModalBtn">＋ 新增水果</button>
+          </div>
+
+          <div class="manage-fruit-list" id="manageFruitList">
+            <!-- 动态渲染品种管理项 -->
+          </div>
+        </div>
+
+        <!-- 团队账号与权限管理卡片 -->
+        <div class="panel-card">
+          <div class="panel-header-flex">
+            <div>
+              <h3 class="panel-title">👥 团队账号与查看权限</h3>
+              <p class="panel-desc">管理员可录入修改价格，普通成员/店员登录后仅可查看每日价格与涨跌趋势</p>
+            </div>
+            <button class="btn-outline" id="switchAccountInTabBtn">🔄 切换登录账号</button>
+          </div>
+          <div class="manage-fruit-list" id="teamMemberList">
+            <!-- 动态渲染团队成员列表 -->
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 4: 共享、备份与上架 ==================== -->
+      <section class="tab-page" id="tab-settings">
+        <!-- 当前登录账号卡片 -->
+        <div class="panel-card user-info-card">
+          <div class="user-card-row">
+            <div class="user-avatar-lg" id="settingsUserIcon">👑</div>
+            <div class="user-card-meta">
+              <div class="user-card-name">
+                <strong id="settingsUserName">张店长(采购管理员)</strong>
+                <span class="role-tag admin" id="settingsRoleBadge">管理员权限</span>
+              </div>
+              <div class="user-card-sub" id="settingsUserAccount">账号：13800000001 ｜ 店铺共享码：8888</div>
+            </div>
+            <button class="btn-outline-danger btn-sm" id="logoutBtn">退出登录</button>
+          </div>
+        </div>
+
+        <!-- 全员实时共享云端同步卡片 (支持 GitHub 仓库直连作为免费云数据库) -->
+        <div class="panel-card">
+          <div class="panel-header-flex">
+            <div>
+              <h3 class="panel-title">☁️ GitHub 全员实时共享报价（免服务器）</h3>
+              <p class="panel-desc">上传到 GitHub 后，直接把您的 GitHub 仓库当作免费云数据库！管理员点「发布今日报价」，所有人的手机自动拉取最新价格。</p>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="githubRepoInput">GitHub 仓库名称 (已默认绑定您的仓库)</label>
+            <input type="text" id="githubRepoInput" class="text-input" placeholder="例如: krisawang/fruit-jilu" value="krisawang/fruit-jilu" />
+          </div>
+          <div class="form-group admin-only">
+            <label for="cloudApiKeyInput">GitHub Token (仅管理员发布报价时需填，普通店员看价无需填写)</label>
+            <input type="password" id="cloudApiKeyInput" class="text-input" placeholder="输入 ghp_ 开头的 GitHub Personal Access Token" />
+          </div>
+          <div class="form-group">
+            <label for="cloudEndpointInput">或自定义第三方云接口 URL (选填，填了 GitHub 仓库名则无需填此项)</label>
+            <input type="url" id="cloudEndpointInput" class="text-input" placeholder="可选：其他自建API或JSONBin地址" />
+          </div>
+          <div class="cloud-btn-row">
+            <button class="btn-outline" id="saveCloudConfigBtn">保存配置</button>
+            <button class="btn-primary admin-only" id="uploadCloudBtn">📢 发布今日报价到 GitHub (所有人可见)</button>
+            <button class="btn-secondary" id="downloadCloudBtn">🔄 刷新拉取最新报价</button>
+          </div>
+          <div class="cloud-status-log" id="cloudSyncStatusText">状态：支持 GitHub 仓库免服务器全员共享报价</div>
+        </div>
+
+        <!-- 导出与备份卡片 -->
+        <div class="panel-card">
+          <h3 class="panel-title">📁 数据导出与本地备份</h3>
+          <p class="panel-desc">您可以随时将价格表导出为 Excel 表格发到微信群，或备份文件防丢失。</p>
+          <div class="backup-btn-grid">
+            <button class="backup-action-btn excel" id="exportCsvBtn">
+              <span class="b-icon">📊</span>
+              <div class="b-text">
+                <strong>导出 Excel (CSV价格报表)</strong>
+                <span>包含每日成本、昨日对比、涨跌幅明细，可直接转发微信</span>
+              </div>
+            </button>
+
+            <button class="backup-action-btn json-out" id="exportJsonBtn">
+              <span class="b-icon">💾</span>
+              <div class="b-text">
+                <strong>导出完整备份 (.json)</strong>
+                <span>用于更换手机或完整保存所有历史数据</span>
+              </div>
+            </button>
+
+            <label class="backup-action-btn json-in admin-only" for="importJsonFileInput">
+              <span class="b-icon">📂</span>
+              <div class="b-text">
+                <strong>导入恢复备份 (.json) [仅管理员]</strong>
+                <span>从备份文件恢复水果品种与全部价格记录</span>
+              </div>
+              <input type="file" id="importJsonFileInput" accept=".json,application/json" class="hidden" />
+            </label>
+          </div>
+        </div>
+
+        <!-- 应用市场上架与扫码下载说明 -->
+        <div class="panel-card">
+          <h3 class="panel-title">🚀 大家如何下载安装？能否上架应用市场？</h3>
+          <div class="guide-steps">
+            <div class="guide-item">
+              <span class="guide-num">1</span>
+              <div>
+                <strong>方式一：生成下载二维码/链接，微信扫码直接安装（最快、免费、免审核）</strong>
+                <p>将打包好的 <code>.apk</code> 安装包上传到「蒲公英 (pgyer.com)」或「fir.im」等免费内测分发平台，会自动生成一个下载二维码，大家用手机扫一扫即可下载安装！</p>
+              </div>
+            </div>
+            <div class="guide-item">
+              <span class="guide-num">2</span>
+              <div>
+                <strong>方式二：正式上架华为 / 小米 / OPPO / vivo / 应用宝 / 苹果 App Store</strong>
+                <p>本项目采用标准 Capacitor 跨平台架构（包名 <code>com.fruitprice.tracker</code>），已内置上架应用市场必需的《用户协议与隐私政策》弹窗。准备好软著与开发者账号后即可提交各大应用商店审核上架。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 数据管理与重置 (仅管理员可见) -->
+        <div class="panel-card danger-zone admin-only">
+          <h3 class="panel-title">⚙️ 示例数据与初始化 (管理员专区)</h3>
+          <p class="panel-desc">正式记账前可一键清空演示价格，保留水果品种。</p>
+          <div class="cloud-btn-row">
+            <button class="btn-outline-danger" id="clearPricesOnlyBtn">🧹 清空历史价格 (保留水果品种)</button>
+            <button class="btn-outline" id="resetDemoDataBtn">🔄 恢复演示数据</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- 底部导航栏 (App TabBar) -->
+    <nav class="app-tabbar">
+      <button class="tab-item active" data-tab="tab-daily">
+        <span class="tab-icon">📝</span>
+        <span class="tab-label" id="tabDailyLabel">今日记价</span>
+      </button>
+      <button class="tab-item" data-tab="tab-trend">
+        <span class="tab-icon">📈</span>
+        <span class="tab-label">趋势对比</span>
+      </button>
+      <button class="tab-item" data-tab="tab-fruits">
+        <span class="tab-icon">🍉</span>
+        <span class="tab-label">品种与成员</span>
+      </button>
+      <button class="tab-item" data-tab="tab-settings">
+        <span class="tab-icon">☁️</span>
+        <span class="tab-label">共享与我的</span>
+      </button>
+    </nav>
+
+    <!-- 新增/编辑水果品种弹窗 Modal -->
+    <div class="modal-overlay hidden" id="fruitModalOverlay">
+      <div class="modal-sheet">
+        <div class="modal-header">
+          <h3 id="fruitModalTitle">新增水果品种</h3>
+          <button class="modal-close-btn" id="closeFruitModalBtn">✕</button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="editFruitIdInput" />
+
+          <div class="form-group">
+            <label>选择图标</label>
+            <div class="emoji-picker" id="emojiPickerGrid"></div>
+          </div>
+
+          <div class="form-group">
+            <label for="fruitNameInput">水果名称 <span class="req">*</span></label>
+            <input type="text" id="fruitNameInput" class="text-input" placeholder="例如：烟台红富士、阳光玫瑰、泰国金枕榴莲" maxlength="20" />
+          </div>
+
+          <div class="form-row-2">
+            <div class="form-group">
+              <label for="fruitUnitSelect">计价单位 <span class="req">*</span></label>
+              <select id="fruitUnitSelect" class="select-input">
+                <option value="元/斤">元/斤</option>
+                <option value="元/公斤">元/公斤</option>
+                <option value="元/箱">元/箱</option>
+                <option value="元/件">元/件</option>
+                <option value="元/筐">元/筐</option>
+                <option value="元/盒">元/盒</option>
+                <option value="元/个">元/个</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="fruitCategorySelect">所属分类</label>
+              <select id="fruitCategorySelect" class="select-input">
+                <option value="日常水果">日常水果</option>
+                <option value="时令鲜果">时令鲜果</option>
+                <option value="进口精品">进口精品</option>
+                <option value="整箱批发">整箱批发</option>
+                <option value="瓜果类">瓜果类</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" id="initialPriceGroup">
+            <label for="fruitInitPriceInput">今日初始成本价 (选填，可直接录入)</label>
+            <input type="number" step="0.01" min="0" id="fruitInitPriceInput" class="text-input" placeholder="如：4.50" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-outline" id="cancelFruitModalBtn">取消</button>
+          <button class="btn-primary" id="saveFruitModalBtn">保存品种</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 用户协议与隐私政策弹窗（国内应用市场上架合规必备） -->
+    <div class="modal-overlay hidden" id="privacyModalOverlay">
+      <div class="modal-sheet">
+        <div class="modal-header">
+          <h3>用户服务协议与隐私政策</h3>
+          <button class="modal-close-btn" id="closePrivacyModalBtn">✕</button>
+        </div>
+        <div class="modal-body" style="font-size:12px;color:#475569;line-height:1.6;max-height:320px;overflow-y:auto;">
+          <p><strong>欢迎使用「水果成本记账」App！</strong></p>
+          <p>1. <strong>信息收集说明</strong>：本应用仅收集您主动创建的账号名称、手机号标识以及录入的水果品种与每日成本价格数据，用于为您提供团队内部价格展示与历史对比服务。</p>
+          <p>2. <strong>权限使用说明</strong>：本应用仅需使用基础网络访问权限（用于同步团队共享水果价格）与本地存储权限（用于离线缓存与导出 Excel 报表），不会获取您的通讯录、定位或相册等无关隐私权限。</p>
+          <p>3. <strong>角色权限规则</strong>：管理员/采购员账号拥有录入及修改每日价格的权限；普通成员/店员账号拥有查看每日价格与历史走势的权限。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-primary" id="acceptPrivacyBtn">我已阅读并同意</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 轻提示 Toast -->
+    <div class="toast-container" id="toastContainer"></div>
+  </div>
+
+  <script src="./js/app.js"></script>
+</body>
+</html>
