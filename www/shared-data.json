@@ -1,44 +1,67 @@
 {
-  "appName": "水果成本记账",
-  "version": "2.1.0",
-  "updatedBy": "张店长(采购员)",
-  "syncedAt": "2026-11-16T13:00:00.000Z",
-  "fruits": [
-    { "id": "f_apple", "name": "烟台红富士", "emoji": "🍎", "unit": "元/斤", "category": "日常水果" },
-    { "id": "f_orange", "name": "广西砂糖橘", "emoji": "🍊", "unit": "元/斤", "category": "时令鲜果" },
-    { "id": "f_grape", "name": "阳光玫瑰青提", "emoji": "🍇", "unit": "元/斤", "category": "时令鲜果" },
-    { "id": "f_straw", "name": "丹东奶油草莓", "emoji": "🍓", "unit": "元/斤", "category": "时令鲜果" },
-    { "id": "f_banana", "name": "海南香蕉", "emoji": "🍌", "unit": "元/斤", "category": "日常水果" },
-    { "id": "f_melon", "name": "麒麟西瓜", "emoji": "🍉", "unit": "元/斤", "category": "瓜果类" },
-    { "id": "f_mango", "name": "海南贵妃芒", "emoji": "🥭", "unit": "元/箱", "category": "整箱批发" },
-    { "id": "f_pear", "name": "库尔勒香梨", "emoji": "🍐", "unit": "元/箱", "category": "整箱批发" },
-    { "id": "f_cherry", "name": "进口车厘子(JJ)", "emoji": "🍒", "unit": "元/箱", "category": "进口精品" },
-    { "id": "f_kiwi", "name": "翠香绿心猕猴桃", "emoji": "🥝", "unit": "元/斤", "category": "日常水果" }
+  "version": "3.0",
+  "syncedAt": "2026-11-16T13:45:00.000Z",
+  "specs": [
+    {
+      "id": "s_blueberry_l25",
+      "fruitName": "蓝莓",
+      "emoji": "🫐",
+      "specTitle": "L25 · 1箱12盒 · 单盒125g",
+      "unit": "元/箱",
+      "subCount": 12,
+      "subUnit": "盒"
+    },
+    {
+      "id": "s_blueberry_l18",
+      "fruitName": "蓝莓",
+      "emoji": "🫐",
+      "specTitle": "L18 · 1箱12盒 · 单盒125g",
+      "unit": "元/箱",
+      "subCount": 12,
+      "subUnit": "盒"
+    },
+    {
+      "id": "s_venus_95",
+      "fruitName": "维纳斯苹果",
+      "emoji": "🍎",
+      "specTitle": "礼盒装 · 95mm+ (8个)",
+      "unit": "元/盒",
+      "subCount": 8,
+      "subUnit": "个"
+    },
+    {
+      "id": "s_venus_90",
+      "fruitName": "维纳斯苹果",
+      "emoji": "🍎",
+      "specTitle": "礼盒装 · 90mm+ (9个)",
+      "unit": "元/盒",
+      "subCount": 9,
+      "subUnit": "个"
+    },
+    {
+      "id": "s_venus_85",
+      "fruitName": "维纳斯苹果",
+      "emoji": "🍎",
+      "specTitle": "礼盒装 · 85mm+ (10个)",
+      "unit": "元/盒",
+      "subCount": 10,
+      "subUnit": "个"
+    }
   ],
   "records": {
     "2026-11-15": {
-      "f_apple": { "price": 4.5, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_orange": { "price": 3.5, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_grape": { "price": 8.8, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_straw": { "price": 15.8, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_banana": { "price": 2.6, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_melon": { "price": 2.9, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_mango": { "price": 46.0, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_pear": { "price": 55.0, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_cherry": { "price": 240.0, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_kiwi": { "price": 5.5, "note": "", "updatedBy": "张店长(采购员)" }
+      "s_blueberry_l25": { "price": 120 },
+      "s_blueberry_l18": { "price": 96 },
+      "s_venus_95": { "price": 68 },
+      "s_venus_90": { "price": 62 },
+      "s_venus_85": { "price": 56 }
     },
     "2026-11-16": {
-      "f_apple": { "price": 4.8, "note": "一级果80#，产地雨天微涨", "updatedBy": "张店长(采购员)" },
-      "f_orange": { "price": 3.2, "note": "今日大车到货充足，降0.3元", "updatedBy": "张店长(采购员)" },
-      "f_grape": { "price": 8.5, "note": "精品无核套袋", "updatedBy": "张店长(采购员)" },
-      "f_straw": { "price": 16.5, "note": "周末需求旺，进价上调", "updatedBy": "张店长(采购员)" },
-      "f_banana": { "price": 2.6, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_melon": { "price": 3.1, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_mango": { "price": 44.0, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_pear": { "price": 55.0, "note": "", "updatedBy": "张店长(采购员)" },
-      "f_cherry": { "price": 235.0, "note": "5斤装原箱到货", "updatedBy": "张店长(采购员)" },
-      "f_kiwi": { "price": 5.5, "note": "", "updatedBy": "张店长(采购员)" }
+      "s_blueberry_l25": { "price": 126 },
+      "s_blueberry_l18": { "price": 92 },
+      "s_venus_95": { "price": 72 },
+      "s_venus_90": { "price": 62 },
+      "s_venus_85": { "price": 54 }
     }
   }
 }
